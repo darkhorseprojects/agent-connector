@@ -1,17 +1,25 @@
 # Agent Connector
 
-Agent Connector routes Discord messages to an explicit [Portable Agents](https://github.com/darkhorseprojects/portable-agents) package. It authenticates Discord, selects a configured execution policy, and starts one `agent run` process per request. It does not embed Portable Agents or interpret an Agent's Markdown, Lua, memory, tools, or provider configuration.
+Agent Connector routes Discord messages directly to [Portable Agents](https://github.com/darkhorseprojects/portable-agents) packages. It authenticates Discord, selects a configured execution policy, and runs one disposable `agent run` process per request using the native Portable Agents TypeScript SDK.
 
-Discord integration uses [Serenity](https://github.com/serenity-rs/serenity).
+## Key Features
 
-## Build
+- **Disposable Execution**: Every incoming request evaluates in a fresh Portable Agents worker with bounded memory and deadlines.
+- **Strict Configuration**: Validates `agent-connector.yaml` against schema, ensuring absolute paths, positive integers, and valid policy references.
+- **Secure Credentials**: Credentials stored under private per-user directories (`0700`/`0600`) keyed by the SHA-256 identity of the canonical agent directory.
+- **Concurrency & FIFO Queue**: Enforces a maximum of 4 concurrent agent processes and a 32-request FIFO queue, replying with `Agent Connector is busy.` when saturated.
+- **Message Routing**:
+  - Direct Messages route by Discord author ID.
+  - Guild messages require mentioning the bot; exact channel routing takes precedence over guild-wide routing.
+  - The bot mention token is stripped cleanly without altering or normalizing whitespace.
+- **Lifecycle & Daemon Control**: Foreground (`agc run`), detached background daemon (`agc up` / `agc down`), and native service autostart (`agc auto on` / `agc auto off` using systemd or launchd).
+
+## Install & Build
 
 ```sh
-cargo build --locked --release
-install target/release/agc ~/.local/bin/agc
+deno task compile
+install bin/agc ~/.local/bin/agc
 ```
-
-`agent` must be available on `PATH`.
 
 ## Configure
 
@@ -30,7 +38,7 @@ policies:
     authority:
       - src/store.lua
       - src/memory.lua
-      - src/sglang.lua
+      - src/llamacpp.lua
       - src/env.lua
     directory: /absolute/workspace
     memory: 96MiB
@@ -46,88 +54,46 @@ guilds:
   "345678901234567890": zinc
 ```
 
-The Agent package is the directory containing this file. Entries and authority paths are relative to that package. `directory` is the working directory for the selected policy and must be absolute.
+- `directory` must be an absolute path representing the working directory for the policy.
+- `authority` paths and `entry` are relative to the package directory.
+- `memory` supports standard units (`B`, `KiB`, `MiB`, `GiB`, `KB`, `MB`, `GB`).
+- `timeout` supports time units (`ms`, `s`, `m`, `h`).
 
-Configuration is strict: unknown and duplicate fields, aliases, anchors, tags, merge keys, numeric IDs, escaping paths, and references to absent policies fail.
-
-## Discord application
-
-Create a bot in the Discord developer portal. Enable the `GUILDS`, `GUILD_MESSAGES`, and `DIRECT_MESSAGES` gateway intents. The privileged Message Content intent is not required: Discord supplies content for direct messages and guild messages that mention the bot.
-
-Connect the credential:
+## Connect Discord Credentials
 
 ```sh
 agc connect /path/to/agent
 ```
 
-The command prompts without echo, validates the bot and application IDs, stores the token privately, and prints the bot installation URL. The requested permissions are View Channels, Send Messages, and Send Messages in Threads. Agent Connector registers no slash commands.
-
-Credentials are stored by the SHA-256 identity of the canonical Agent directory:
+The command prompts for your Discord Bot Token without echo, verifies application and bot IDs against Discord API endpoints, securely writes the credential file, and prints the bot invite URL:
 
 ```text
-Linux/macOS  ~/.agents/credentials/<identity>.discord-token
-Windows      %LOCALAPPDATA%\Agent Connector\credentials\<identity>.discord-token
+Linux/macOS:  ~/.agents/credentials/<sha256(canonical_path)>.discord-token (mode 0600)
+Windows:      %LOCALAPPDATA%\Agent Connector\credentials\<sha256(canonical_path)>.discord-token
 ```
 
-Unix directories use mode `0700` and token files use `0600`. Windows ACLs grant the current user and `SYSTEM`. Tokens are never stored in YAML, logs, Agent arguments, or the Agent environment.
-
-## Operate
+## Commands
 
 ```sh
+# Validate configuration and compile package entry points
 agc check /path/to/agent
+
+# Run foreground connector service
 agc run /path/to/agent
+
+# Start detached background daemon
 agc up /path/to/agent
+
+# Stop running background daemon
 agc down /path/to/agent
+
+# Enable system autostart service (systemd user unit on Linux, launchd on macOS)
 agc auto on /path/to/agent
+
+# Disable system autostart service
 agc auto off /path/to/agent
-agc /path/to/agent
-```
-
-`DIRECTORY` may be omitted only when the current directory itself contains `agent-connector.yaml`. Parent directories are not searched.
-
-DMs route by author ID. Guild messages must mention the bot; exact channel routing wins over guild routing. The mention token is removed without trimming or normalizing the remaining content. Bot and webhook messages are ignored.
-
-At most four Agent processes run concurrently and 32 requests wait in FIFO order. A full queue receives `Agent Connector is busy.` Each successful Agent result must be nonempty UTF-8 valid as one Discord message. It is sent unchanged with Discord mention parsing disabled.
-
-## Invocation
-
-A request from Discord user `998877` under the sample policy becomes:
-
-```sh
-agent run \
-  --directory /path/to/agent \
-  --entry zinc.md \
-  --authority src/store.lua \
-  --authority src/memory.lua \
-  --authority src/sglang.lua \
-  --authority src/env.lua \
-  --memory 96MiB \
-  --timeout 30s \
-  -- 998877
-```
-
-The exact request is provided on stdin. Agent Connector drains bounded stdout and stderr concurrently and owns the complete process group or Windows Job Object. Timeout and overflow terminate all descendants.
-
-## Lifecycle
-
-`agc run` is the foreground service. `up` starts it detached and waits for Discord readiness. `down` uses an authenticated owner-private Unix socket or Windows named pipe; it does not kill a PID read from a file.
-
-Autostart uses:
-
-- systemd user services on Linux;
-- LaunchAgents on macOS;
-- Task Scheduler on Windows.
-
-The service executes `agc run` with the canonical Agent directory. Service definitions contain no credential.
-
-## Validate
-
-```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
 ```
 
 ## License
 
-Apache-2.0
+[Apache-2.0](LICENSE)

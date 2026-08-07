@@ -1,0 +1,17 @@
+{
+  "name": "@darkhorseprojects/agent-connector",
+  "version": "0.2.0",
+  "exports": "./src/mod.ts",
+  "tasks": {
+    "test": "deno test --allow-read --allow-write --allow-env --allow-net",
+    "compile": "deno compile --allow-read --allow-write --allow-net --allow-run --allow-env --output bin/agc src/main.ts"
+  },
+  "imports": {
+    "@std/path": "jsr:@std/path@^1.0.8",
+    "@std/fs": "jsr:@std/fs@^1.0.8",
+    "@std/yaml": "jsr:@std/yaml@^1.0.5",
+    "@std/crypto": "jsr:@std/crypto@^1.0.4",
+    "@std/assert": "jsr:@std/assert@^1.0.10",
+    "@darkhorseprojects/portable-agents": "../portable-agents/sdk/mod.ts"
+  }
+}
