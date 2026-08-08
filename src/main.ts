@@ -2,7 +2,7 @@ import { parseConfig } from "./config.ts";
 import { loadToken, saveToken, validateToken, botInviteUrl } from "./credentials.ts";
 import { checkAgent } from "./invoke.ts";
 import { DiscordConnector } from "./discord.ts";
-import { startIpcServer, stopDaemon, probeReady, configureAutostart } from "./lifecycle.ts";
+import { startIpcServer, stopDaemon, probeReady, addAutostart, removeAutostart, listAutostart } from "./lifecycle.ts";
 import { setupNewConfig, editExistingConfig } from "./setup.ts";
 import { join } from "@std/path";
 
@@ -29,15 +29,15 @@ Usage:
   agc run [DIR]           Run foreground connector service
   agc up [DIR]            Start detached background connector service
   agc down [DIR]          Stop running background connector service
-  agc auto on [DIR]       Configure system autostart service (systemd / launchd)
-  agc auto off [DIR]      Disable system autostart service
+  agc auto add [DIR]      Register and enable system autostart service (systemd / launchd)
+  agc auto remove [DIR]   Unregister and remove system autostart service
+  agc auto list           List all registered autostart agents and their statuses
 `);
     return;
   }
 
   if (command === "connect") {
     const dir = resolveDir(args[1]);
-    const configFile = join(dir, "agent-connector.yaml");
     try {
       const config = await loadAgentConfig(dir);
       await editExistingConfig(dir, config);
@@ -126,14 +126,17 @@ Usage:
   }
 
   if (command === "auto") {
-    const sub = args[1];
-    const dir = resolveDir(args[2]);
-    if (sub === "on") {
-      await configureAutostart(dir, true);
-    } else if (sub === "off") {
-      await configureAutostart(dir, false);
+    const sub = args[1] || "list";
+    if (sub === "add") {
+      const dir = resolveDir(args[2]);
+      await addAutostart(dir);
+    } else if (sub === "remove" || sub === "rm" || sub === "delete") {
+      const dir = resolveDir(args[2]);
+      await removeAutostart(dir);
+    } else if (sub === "list" || sub === "ls") {
+      await listAutostart();
     } else {
-      console.error("Usage: agc auto on [DIR] | agc auto off [DIR]");
+      console.error("Usage:\n  agc auto add [DIR]\n  agc auto remove [DIR]\n  agc auto list");
       Deno.exit(1);
     }
     return;

@@ -87,11 +87,14 @@ agc up /path/to/agent
 # Stop running background daemon
 agc down /path/to/agent
 
-# Enable system autostart service (systemd user unit on Linux, launchd on macOS)
-agc auto on /path/to/agent
+# Register and enable system autostart service (systemd user unit on Linux, launchd on macOS)
+agc auto add /path/to/agent
 
-# Disable system autostart service
-agc auto off /path/to/agent
+# Unregister and remove system autostart service
+agc auto remove /path/to/agent
+
+# List all registered autostart agent services and their statuses
+agc auto list
 ```
 
 ## License

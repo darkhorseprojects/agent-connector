@@ -4,5 +4,5 @@ export { DiscordConnector, stripBotMention } from "./discord.ts";
 export { RequestQueue } from "./queue.ts";
 export { checkAgent, runAgent } from "./invoke.ts";
 export { loadToken, saveToken, validateToken, botInviteUrl, canonicalIdentity } from "./credentials.ts";
-export { getSocketPath, startIpcServer, stopDaemon, probeReady, configureAutostart } from "./lifecycle.ts";
+export { getSocketPath, startIpcServer, stopDaemon, probeReady, addAutostart, removeAutostart, listAutostart } from "./lifecycle.ts";
 export { setupNewConfig, editExistingConfig, discoverFiles, selectPolicy } from "./setup.ts";
