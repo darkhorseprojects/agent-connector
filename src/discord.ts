@@ -162,9 +162,22 @@ export class DiscordConnector {
         if (payload.t === "READY") {
           this.#sessionId = payload.d.session_id;
           this.#reconnectAttempts = 0;
+          this.#send(GatewayOp.PresenceUpdate, {
+            since: null,
+            activities: [{ name: this.#agentName, type: 0, state: "Ready to chat" }],
+            status: "online",
+            afk: false,
+          });
           const u = payload.d.user;
           const tag = `${u.username}${u.discriminator === "0" ? "" : `#${u.discriminator}`}`;
           this.#onReady?.(tag);
+        } else if (payload.t === "GUILD_CREATE") {
+          this.#send(GatewayOp.PresenceUpdate, {
+            since: null,
+            activities: [{ name: this.#agentName, type: 0, state: "Ready to chat" }],
+            status: "online",
+            afk: false,
+          });
         } else if (payload.t === "MESSAGE_CREATE") {
           this.#handleMessage(payload.d);
         }
