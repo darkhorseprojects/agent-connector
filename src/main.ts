@@ -12,12 +12,18 @@ async function loadConfig(dir: string) {
 }
 
 async function resolveDir(arg?: string): Promise<string> {
-  const p = arg ? resolve(Deno.cwd(), arg) : Deno.cwd();
+  if (!arg || arg === ".") return Deno.cwd();
+  const direct = resolve(Deno.cwd(), arg);
   try {
-    return await Deno.realPath(p);
-  } catch (_e) {
-    return p;
+    return await Deno.realPath(direct);
+  } catch (_e) {}
+  const home = Deno.env.get("HOME") || "";
+  if (home) {
+    try {
+      return await Deno.realPath(resolve(home, arg));
+    } catch (_e) {}
   }
+  return direct;
 }
 
 async function startForegroundService(dir: string) {
