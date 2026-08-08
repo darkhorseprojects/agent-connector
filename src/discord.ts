@@ -1,9 +1,11 @@
 import type { ConnectorConfig } from "./config.ts";
 import { RequestQueue } from "./queue.ts";
-import { runAgent, splitDiscordMessage } from "./invoke.ts";
+import { runAgent } from "./invoke.ts";
+import { splitDiscordMessage, deriveThreadTitle } from "./format.ts";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) = 4609 (No privileged intent toggle required)
+const API_BASE = "https://discord.com/api/v10";
+// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) = 4609
 const INTENTS = (1 << 0) | (1 << 9) | (1 << 12);
 
 export interface DiscordGatewayOptions {
@@ -24,6 +26,20 @@ export function stripBotMention(content: string, botId: string): string | null {
   return null;
 }
 
+enum GatewayOp {
+  Dispatch = 0,
+  Heartbeat = 1,
+  Identify = 2,
+  PresenceUpdate = 3,
+  VoiceStateUpdate = 4,
+  Resume = 6,
+  Reconnect = 7,
+  RequestGuildMembers = 8,
+  InvalidSession = 9,
+  Hello = 10,
+  HeartbeatACK = 11,
+}
+
 export class DiscordConnector {
   readonly #token: string;
   readonly #config: ConnectorConfig;
@@ -35,6 +51,7 @@ export class DiscordConnector {
   #heartbeatAcked = true;
   #sessionId: string | null = null;
   #sequence: number | null = null;
+  #reconnectAttempts = 0;
   #signal?: AbortSignal;
   #onReady?: (user: string) => void;
 
@@ -48,7 +65,9 @@ export class DiscordConnector {
 
   async start(): Promise<void> {
     this.#connect();
-    if (this.#signal) this.#signal.addEventListener("abort", () => this.stop());
+    if (this.#signal) {
+      this.#signal.addEventListener("abort", () => this.stop());
+    }
   }
 
   stop(): void {
@@ -69,8 +88,8 @@ export class DiscordConnector {
 
     ws.onmessage = (event) => {
       try {
-        const p = JSON.parse(String(event.data));
-        this.#handlePayload(p);
+        const payload = JSON.parse(String(event.data));
+        this.#handlePayload(payload);
       } catch (err) {
         console.error("Gateway parse error:", err);
       }
@@ -82,8 +101,10 @@ export class DiscordConnector {
         this.#heartbeatTimer = null;
       }
       if (!this.#signal?.aborted && event.code !== 1000) {
-        console.warn(`Gateway closed (${event.code}). Reconnecting in 3s...`);
-        setTimeout(() => this.#connect(), 3000);
+        const delay = Math.min(30000, 1000 * Math.pow(2, this.#reconnectAttempts)) + Math.floor(Math.random() * 1000);
+        this.#reconnectAttempts++;
+        console.warn(`Gateway closed (${event.code}). Reconnecting in ${(delay / 1000).toFixed(1)}s...`);
+        setTimeout(() => this.#connect(), delay);
       }
     };
 
@@ -93,46 +114,61 @@ export class DiscordConnector {
   #handlePayload(payload: { op: number; d: any; s?: number; t?: string }): void {
     if (payload.s != null) this.#sequence = payload.s;
 
-    if (payload.op === 10) { // Hello
-      const interval = payload.d.heartbeat_interval;
-      this.#heartbeatAcked = true;
-      setTimeout(() => {
-        this.#sendHeartbeat();
-        this.#heartbeatTimer = setInterval(() => this.#sendHeartbeat(), interval);
-      }, Math.floor(interval * Math.random()));
+    switch (payload.op) {
+      case GatewayOp.Hello: {
+        const interval = payload.d.heartbeat_interval;
+        this.#heartbeatAcked = true;
+        setTimeout(() => {
+          this.#sendHeartbeat();
+          this.#heartbeatTimer = setInterval(() => this.#sendHeartbeat(), interval);
+        }, Math.floor(interval * Math.random()));
 
-      if (this.#sessionId && this.#sequence !== null) {
-        this.#send(6, { token: this.#token, session_id: this.#sessionId, seq: this.#sequence }); // Resume
-      } else {
-        this.#send(2, {
-          token: this.#token,
-          intents: INTENTS,
-          properties: { os: Deno.build.os, browser: "AgentConnector", device: "AgentConnector" },
-          presence: {
-            status: "online",
-            activities: [{ name: this.#agentName, type: 0 }],
-            afk: false,
-            since: null,
-          },
-        }); // Identify
+        if (this.#sessionId && this.#sequence !== null) {
+          this.#send(GatewayOp.Resume, { token: this.#token, session_id: this.#sessionId, seq: this.#sequence });
+        } else {
+          this.#send(GatewayOp.Identify, {
+            token: this.#token,
+            intents: INTENTS,
+            properties: { os: Deno.build.os, browser: "AgentConnector", device: "AgentConnector" },
+            presence: {
+              status: "online",
+              activities: [{ name: this.#agentName, type: 0 }],
+              afk: false,
+              since: null,
+            },
+          });
+        }
+        break;
       }
-    } else if (payload.op === 11) {
-      this.#heartbeatAcked = true;
-    } else if (payload.op === 1) {
-      this.#sendHeartbeat();
-    } else if (payload.op === 7) {
-      this.#ws?.close(4000, "reconnect requested");
-    } else if (payload.op === 9) {
-      this.#sessionId = null;
-      setTimeout(() => this.#connect(), 1000);
-    } else if (payload.op === 0) {
-      if (payload.t === "READY") {
-        this.#sessionId = payload.d.session_id;
-        const u = payload.d.user;
-        this.#onReady?.(`${u.username}#${u.discriminator === "0" ? "" : u.discriminator}`);
-      } else if (payload.t === "MESSAGE_CREATE") {
-        this.#handleMessage(payload.d);
-      }
+
+      case GatewayOp.HeartbeatACK:
+        this.#heartbeatAcked = true;
+        break;
+
+      case GatewayOp.Heartbeat:
+        this.#sendHeartbeat();
+        break;
+
+      case GatewayOp.Reconnect:
+        this.#ws?.close(4000, "reconnect requested");
+        break;
+
+      case GatewayOp.InvalidSession:
+        this.#sessionId = null;
+        setTimeout(() => this.#connect(), 1000);
+        break;
+
+      case GatewayOp.Dispatch:
+        if (payload.t === "READY") {
+          this.#sessionId = payload.d.session_id;
+          this.#reconnectAttempts = 0;
+          const u = payload.d.user;
+          const tag = `${u.username}${u.discriminator === "0" ? "" : `#${u.discriminator}`}`;
+          this.#onReady?.(tag);
+        } else if (payload.t === "MESSAGE_CREATE") {
+          this.#handleMessage(payload.d);
+        }
+        break;
     }
   }
 
@@ -142,10 +178,10 @@ export class DiscordConnector {
       return;
     }
     this.#heartbeatAcked = false;
-    this.#send(1, this.#sequence);
+    this.#send(GatewayOp.Heartbeat, this.#sequence);
   }
 
-  #send(op: number, d: any): void {
+  #send(op: GatewayOp, d: any): void {
     if (this.#ws && this.#ws.readyState === WebSocket.OPEN) {
       this.#ws.send(JSON.stringify({ op, d }));
     }
@@ -162,34 +198,30 @@ export class DiscordConnector {
     let createThreadForMessage = false;
 
     if (!guildId) {
-      // Direct Message: normal response in DM
+      // Direct Message
       policyName = this.#config.users[authorId];
       inputContent = msg.content || "";
     } else if (this.#activeThreads.has(channelId)) {
-      // Continuing conversation inside an active thread: no @mention needed!
+      // Seamless conversation continuation inside active thread
       policyName = this.#activeThreads.get(channelId);
       inputContent = msg.content || "";
       createThreadForMessage = false;
     } else {
-      // Guild Channel Message
+      // Guild Channel
       const stripped = stripBotMention(msg.content || "", this.#config.discord.bot);
 
       if (stripped !== null) {
-        // Explicit mention in any channel / thread
         inputContent = stripped;
         policyName = this.#config.channels[channelId] || this.#config.guilds[guildId];
-        // If mentioned inside a thread, remember it as an active thread
         if (msg.thread !== undefined || msg.type === 11 || msg.type === 12) {
           if (policyName) this.#activeThreads.set(channelId, policyName);
         }
       } else if (this.#config.channels[channelId]) {
-        // Unmentioned message in a configured channel: spawn thread
         inputContent = msg.content || "";
         policyName = this.#config.channels[channelId];
         const isAlreadyThread = msg.thread !== undefined || msg.type === 11 || msg.type === 12;
         createThreadForMessage = !isAlreadyThread;
       } else {
-        // Unmentioned message in unconfigured channel: ignore
         return;
       }
     }
@@ -202,8 +234,8 @@ export class DiscordConnector {
       const chunks = splitDiscordMessage(response, 2000);
 
       if (createThreadForMessage) {
-        const threadName = (inputContent.slice(0, 48).trim() || "Agent Conversation");
-        const threadId = await this.#createThread(channelId, msg.id, threadName);
+        const initialTitle = deriveThreadTitle(inputContent);
+        const threadId = await this.#createThread(channelId, msg.id, initialTitle);
         const targetChannel = threadId || channelId;
         if (threadId) {
           this.#activeThreads.set(threadId, policyName);
@@ -230,7 +262,7 @@ export class DiscordConnector {
 
   async #createThread(channelId: string, messageId: string, name: string): Promise<string | null> {
     try {
-      const url = `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/threads`;
+      const url = `${API_BASE}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/threads`;
       const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -252,7 +284,7 @@ export class DiscordConnector {
   }
 
   async #sendMessage(channelId: string, replyToMessageId: string | undefined, text: string): Promise<void> {
-    const url = `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`;
+    const url = `${API_BASE}/channels/${encodeURIComponent(channelId)}/messages`;
     const payload: Record<string, unknown> = {
       content: text,
       allowed_mentions: { parse: [] },
