@@ -10,135 +10,116 @@ export type Policy = Readonly<{
 
 export type ConnectorConfig = Readonly<{
   version: 1;
-  discord: Readonly<{
-    application: string;
-    bot: string;
-  }>;
+  discord: Readonly<{ application: string; bot: string }>;
   policies: Readonly<Record<string, Policy>>;
   users: Readonly<Record<string, string>>;
   channels: Readonly<Record<string, string>>;
   guilds: Readonly<Record<string, string>>;
 }>;
 
-export function parseMemory(value: string): number {
-  const match = value.trim().match(/^(\d+)\s*(B|KiB|MiB|GiB|KB|MB|GB)?$/i);
-  if (!match) throw new TypeError(`invalid memory format: ${value}`);
-  const amount = Number(match[1]);
-  if (!Number.isSafeInteger(amount) || amount <= 0) throw new RangeError(`invalid memory amount: ${value}`);
-  const unit = (match[2] || "B").toUpperCase();
-  const multipliers: Record<string, number> = {
-    B: 1,
-    KIB: 1024,
-    MIB: 1024 * 1024,
-    GIB: 1024 * 1024 * 1024,
-    KB: 1000,
-    MB: 1000 * 1000,
-    GB: 1000 * 1000 * 1000,
-  };
-  const multiplier = multipliers[unit];
-  if (multiplier === undefined) throw new TypeError(`unknown memory unit: ${unit}`);
-  return amount * multiplier;
+const MEM_UNITS: Record<string, number> = {
+  B: 1, KIB: 1024, MIB: 1024 ** 2, GIB: 1024 ** 3,
+  KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3,
+};
+
+const TIME_UNITS: Record<string, number> = {
+  ms: 1, s: 1000, m: 60 * 1000, h: 3600 * 1000,
+};
+
+export function parseMemory(val: string): number {
+  const m = val.trim().match(/^(\d+)\s*(B|KiB|MiB|GiB|KB|MB|GB)?$/i);
+  if (!m) throw new TypeError(`invalid memory format: ${val}`);
+  const amount = Number(m[1]);
+  const mult = MEM_UNITS[(m[2] || "B").toUpperCase()];
+  if (!Number.isSafeInteger(amount) || amount <= 0 || !mult) {
+    throw new RangeError(`invalid memory value: ${val}`);
+  }
+  return amount * mult;
 }
 
-export function formatMemory(bytes: number): string {
-  if (bytes % (1024 * 1024 * 1024) === 0) return `${bytes / (1024 * 1024 * 1024)}GiB`;
-  if (bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)}MiB`;
-  if (bytes % 1024 === 0) return `${bytes / 1024}KiB`;
-  return `${bytes}B`;
+export function formatMemory(b: number): string {
+  if (b % (1024 ** 3) === 0) return `${b / 1024 ** 3}GiB`;
+  if (b % (1024 ** 2) === 0) return `${b / 1024 ** 2}MiB`;
+  if (b % 1024 === 0) return `${b / 1024}KiB`;
+  return `${b}B`;
 }
 
-export function parseTimeout(value: string): number {
-  const match = value.trim().match(/^(\d+)\s*(ms|s|m|h)?$/i);
-  if (!match) throw new TypeError(`invalid timeout format: ${value}`);
-  const amount = Number(match[1]);
-  if (!Number.isSafeInteger(amount) || amount <= 0) throw new RangeError(`invalid timeout amount: ${value}`);
-  const unit = (match[2] || "s").toLowerCase();
-  const multipliers: Record<string, number> = {
-    ms: 1,
-    s: 1000,
-    m: 60 * 1000,
-    h: 3600 * 1000,
-  };
-  return amount * multipliers[unit];
+export function parseTimeout(val: string): number {
+  const m = val.trim().match(/^(\d+)\s*(ms|s|m|h)?$/i);
+  if (!m) throw new TypeError(`invalid timeout format: ${val}`);
+  const amount = Number(m[1]);
+  const mult = TIME_UNITS[(m[2] || "s").toLowerCase()];
+  if (!Number.isSafeInteger(amount) || amount <= 0 || !mult) {
+    throw new RangeError(`invalid timeout value: ${val}`);
+  }
+  return amount * mult;
 }
 
 export function formatTimeout(ms: number): string {
-  if (ms % (3600 * 1000) === 0) return `${ms / (3600 * 1000)}h`;
-  if (ms % (60 * 1000) === 0) return `${ms / (60 * 1000)}m`;
+  if (ms % 3600000 === 0) return `${ms / 3600000}h`;
+  if (ms % 60000 === 0) return `${ms / 60000}m`;
   if (ms % 1000 === 0) return `${ms / 1000}s`;
   return `${ms}ms`;
 }
 
 export function serializeConfig(config: ConnectorConfig): string {
-  const policiesObj: Record<string, unknown> = {};
-  for (const [name, pol] of Object.entries(config.policies)) {
-    policiesObj[name] = {
-      entry: pol.entry,
-      authority: [...pol.authority],
-      directory: pol.directory,
-      memory: formatMemory(pol.memoryBytes),
-      timeout: formatTimeout(pol.timeoutMs),
+  const policies: Record<string, unknown> = {};
+  for (const [name, p] of Object.entries(config.policies)) {
+    policies[name] = {
+      entry: p.entry,
+      authority: [...p.authority],
+      directory: p.directory,
+      memory: formatMemory(p.memoryBytes),
+      timeout: formatTimeout(p.timeoutMs),
     };
   }
-
-  const raw: Record<string, unknown> = {
+  return stringifyYaml({
     version: 1,
-    discord: {
-      application: config.discord.application,
-      bot: config.discord.bot,
-    },
-    policies: policiesObj,
+    discord: { application: config.discord.application, bot: config.discord.bot },
+    policies,
     users: { ...config.users },
     channels: { ...config.channels },
     guilds: { ...config.guilds },
-  };
-
-  return stringifyYaml(raw);
+  });
 }
 
-export function parseConfig(yamlSource: string, packageDir?: string): ConnectorConfig {
+export function parseConfig(yamlSource: string, _packageDir?: string): ConnectorConfig {
   const raw = parseYaml(yamlSource) as Record<string, unknown>;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new TypeError("configuration root must be a YAML object");
   }
 
-  const allowedRootKeys = new Set(["version", "discord", "policies", "users", "channels", "guilds"]);
-  for (const key of Object.keys(raw)) {
-    if (!allowedRootKeys.has(key)) throw new TypeError(`unknown configuration key: ${key}`);
+  const allowed = new Set(["version", "discord", "policies", "users", "channels", "guilds"]);
+  for (const k of Object.keys(raw)) {
+    if (!allowed.has(k)) throw new TypeError(`unknown configuration key: ${k}`);
   }
-
   if (raw.version !== 1) throw new TypeError(`unsupported version: ${raw.version}`);
 
   const discord = raw.discord as Record<string, unknown>;
-  if (!discord || typeof discord !== "object" || typeof discord.application !== "string" || typeof discord.bot !== "string") {
+  if (!discord || typeof discord.application !== "string" || typeof discord.bot !== "string") {
     throw new TypeError("discord section must define application and bot IDs as strings");
   }
 
   const rawPolicies = (raw.policies || {}) as Record<string, Record<string, unknown>>;
-  if (typeof rawPolicies !== "object" || Array.isArray(rawPolicies) || Object.keys(rawPolicies).length === 0) {
+  if (!rawPolicies || typeof rawPolicies !== "object" || Object.keys(rawPolicies).length === 0) {
     throw new TypeError("at least one policy must be defined");
   }
 
   const policies: Record<string, Policy> = {};
-  for (const [name, pol] of Object.entries(rawPolicies)) {
-    if (!pol || typeof pol !== "object" || typeof pol.entry !== "string" || typeof pol.directory !== "string") {
+  for (const [name, p] of Object.entries(rawPolicies)) {
+    if (!p || typeof p.entry !== "string" || typeof p.directory !== "string") {
       throw new TypeError(`policy '${name}' must define entry and directory`);
     }
-    if (!pol.directory.startsWith("/")) {
-      throw new TypeError(`policy '${name}' directory must be an absolute path: ${pol.directory}`);
+    if (!p.directory.startsWith("/")) {
+      throw new TypeError(`policy '${name}' directory must be an absolute path: ${p.directory}`);
     }
-    const authority = Array.isArray(pol.authority)
-      ? pol.authority.map((a) => String(a))
-      : [];
-    const memoryBytes = typeof pol.memory === "string" ? parseMemory(pol.memory) : 96 * 1024 * 1024;
-    const timeoutMs = typeof pol.timeout === "string" ? parseTimeout(pol.timeout) : 30_000;
-
+    const authority = Array.isArray(p.authority) ? p.authority.map(String) : [];
     policies[name] = Object.freeze({
-      entry: pol.entry,
+      entry: p.entry,
       authority: Object.freeze(authority),
-      directory: pol.directory,
-      memoryBytes,
-      timeoutMs,
+      directory: p.directory,
+      memoryBytes: typeof p.memory === "string" ? parseMemory(p.memory) : 96 * 1024 * 1024,
+      timeoutMs: typeof p.timeout === "string" ? parseTimeout(p.timeout) : 30_000,
     });
   }
 
@@ -147,21 +128,18 @@ export function parseConfig(yamlSource: string, packageDir?: string): ConnectorC
     if (typeof mapping !== "object" || Array.isArray(mapping)) {
       throw new TypeError(`${kind} must be a mapping of IDs to policy names`);
     }
-    const result: Record<string, string> = {};
-    for (const [id, polName] of Object.entries(mapping as Record<string, unknown>)) {
-      const p = String(polName);
+    const res: Record<string, string> = {};
+    for (const [id, pol] of Object.entries(mapping as Record<string, unknown>)) {
+      const p = String(pol);
       if (!policies[p]) throw new TypeError(`${kind} references non-existent policy: ${p}`);
-      result[String(id)] = p;
+      res[String(id)] = p;
     }
-    return Object.freeze(result);
+    return Object.freeze(res);
   };
 
   return Object.freeze({
     version: 1,
-    discord: Object.freeze({
-      application: String(discord.application),
-      bot: String(discord.bot),
-    }),
+    discord: Object.freeze({ application: String(discord.application), bot: String(discord.bot) }),
     policies: Object.freeze(policies),
     users: validateRouting(raw.users, "users"),
     channels: validateRouting(raw.channels, "channels"),

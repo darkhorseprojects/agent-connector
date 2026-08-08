@@ -1,4 +1,4 @@
-import type { ConnectorConfig, Policy } from "./config.ts";
+import type { ConnectorConfig } from "./config.ts";
 import { RequestQueue } from "./queue.ts";
 import { runAgent } from "./invoke.ts";
 
@@ -13,19 +13,12 @@ export interface DiscordGatewayOptions {
 }
 
 export function stripBotMention(content: string, botId: string): string | null {
-  const mentionStandard = `<@${botId}>`;
-  const mentionNick = `<@!${botId}>`;
-
-  const idxStandard = content.indexOf(mentionStandard);
-  if (idxStandard !== -1) {
-    return content.slice(0, idxStandard) + content.slice(idxStandard + mentionStandard.length);
-  }
-
-  const idxNick = content.indexOf(mentionNick);
-  if (idxNick !== -1) {
-    return content.slice(0, idxNick) + content.slice(idxNick + mentionNick.length);
-  }
-
+  const std = `<@${botId}>`;
+  const nick = `<@!${botId}>`;
+  const idx = content.indexOf(std);
+  if (idx !== -1) return content.slice(0, idx) + content.slice(idx + std.length);
+  const idxNick = content.indexOf(nick);
+  if (idxNick !== -1) return content.slice(0, idxNick) + content.slice(idxNick + nick.length);
   return null;
 }
 
@@ -50,9 +43,7 @@ export class DiscordConnector {
 
   async start(): Promise<void> {
     this.#connect();
-    if (this.#signal) {
-      this.#signal.addEventListener("abort", () => this.stop());
-    }
+    if (this.#signal) this.#signal.addEventListener("abort", () => this.stop());
   }
 
   stop(): void {
@@ -73,8 +64,8 @@ export class DiscordConnector {
 
     ws.onmessage = (event) => {
       try {
-        const payload = JSON.parse(String(event.data));
-        this.#handlePayload(payload);
+        const p = JSON.parse(String(event.data));
+        this.#handlePayload(p);
       } catch (err) {
         console.error("Gateway parse error:", err);
       }
@@ -91,61 +82,42 @@ export class DiscordConnector {
       }
     };
 
-    ws.onerror = (err) => {
-      console.error("Gateway WebSocket error:", err);
-    };
+    ws.onerror = (err) => console.error("Gateway WebSocket error:", err);
   }
 
   #handlePayload(payload: { op: number; d: any; s?: number; t?: string }): void {
-    if (payload.s !== undefined && payload.s !== null) {
-      this.#sequence = payload.s;
-    }
+    if (payload.s != null) this.#sequence = payload.s;
 
-    switch (payload.op) {
-      case 10: { // Hello
-        const interval = payload.d.heartbeat_interval;
-        this.#heartbeatAcked = true;
-        const initialJitter = Math.floor(interval * Math.random());
-        setTimeout(() => {
-          this.#sendHeartbeat();
-          this.#heartbeatTimer = setInterval(() => this.#sendHeartbeat(), interval);
-        }, initialJitter);
-
-        if (this.#sessionId && this.#sequence !== null) {
-          this.#send(6, { // Resume
-            token: this.#token,
-            session_id: this.#sessionId,
-            seq: this.#sequence,
-          });
-        } else {
-          this.#send(2, { // Identify
-            token: this.#token,
-            intents: INTENTS,
-            properties: {
-              os: Deno.build.os,
-              browser: "AgentConnector",
-              device: "AgentConnector",
-            },
-          });
-        }
-        break;
-      }
-      case 11: // Heartbeat ACK
-        this.#heartbeatAcked = true;
-        break;
-      case 1: // Heartbeat requested
+    if (payload.op === 10) { // Hello
+      const interval = payload.d.heartbeat_interval;
+      this.#heartbeatAcked = true;
+      setTimeout(() => {
         this.#sendHeartbeat();
-        break;
-      case 7: // Reconnect
-        this.#ws?.close(4000, "reconnect requested");
-        break;
-      case 9: // Invalid session
-        this.#sessionId = null;
-        setTimeout(() => this.#connect(), 1000);
-        break;
-      case 0: // Dispatch
-        this.#handleDispatch(payload.t, payload.d);
-        break;
+        this.#heartbeatTimer = setInterval(() => this.#sendHeartbeat(), interval);
+      }, Math.floor(interval * Math.random()));
+
+      if (this.#sessionId && this.#sequence !== null) {
+        this.#send(6, { token: this.#token, session_id: this.#sessionId, seq: this.#sequence }); // Resume
+      } else {
+        this.#send(2, { token: this.#token, intents: INTENTS, properties: { os: Deno.build.os, browser: "AgentConnector", device: "AgentConnector" } }); // Identify
+      }
+    } else if (payload.op === 11) {
+      this.#heartbeatAcked = true;
+    } else if (payload.op === 1) {
+      this.#sendHeartbeat();
+    } else if (payload.op === 7) {
+      this.#ws?.close(4000, "reconnect requested");
+    } else if (payload.op === 9) {
+      this.#sessionId = null;
+      setTimeout(() => this.#connect(), 1000);
+    } else if (payload.op === 0) {
+      if (payload.t === "READY") {
+        this.#sessionId = payload.d.session_id;
+        const u = payload.d.user;
+        this.#onReady?.(`${u.username}#${u.discriminator === "0" ? "" : u.discriminator}`);
+      } else if (payload.t === "MESSAGE_CREATE") {
+        this.#handleMessage(payload.d);
+      }
     }
   }
 
@@ -164,45 +136,30 @@ export class DiscordConnector {
     }
   }
 
-  #handleDispatch(event: string | undefined, data: any): void {
-    if (event === "READY") {
-      this.#sessionId = data.session_id;
-      const username = `${data.user.username}#${data.user.discriminator === "0" ? "" : data.user.discriminator}`;
-      this.#onReady?.(username);
-    } else if (event === "MESSAGE_CREATE") {
-      this.#handleMessage(data);
-    }
-  }
-
   async #handleMessage(msg: any): Promise<void> {
     if (msg.author?.bot || msg.webhook_id) return;
-
     const authorId = String(msg.author.id);
     const channelId = String(msg.channel_id);
     const guildId = msg.guild_id ? String(msg.guild_id) : null;
+
     let inputContent: string;
     let policyName: string | undefined;
 
     if (!guildId) {
-      // Direct Message
       policyName = this.#config.users[authorId];
       inputContent = msg.content || "";
     } else {
-      // Guild Message: require mention
       const stripped = stripBotMention(msg.content || "", this.#config.discord.bot);
       if (stripped === null) return;
       inputContent = stripped;
       policyName = this.#config.channels[channelId] || this.#config.guilds[guildId];
     }
 
-    if (!policyName) return;
+    if (!policyName || !this.#config.policies[policyName]) return;
     const policy = this.#config.policies[policyName];
-    if (!policy) return;
 
     try {
-      const response = await this.#queue.run(async () => {
-        return await runAgent(policy, authorId, inputContent);
-      });
+      const response = await this.#queue.run(() => runAgent(policy, authorId, inputContent));
       await this.#sendMessage(channelId, msg.id, response);
     } catch (err: any) {
       if (err.message === "Agent Connector is busy.") {
@@ -220,16 +177,12 @@ export class DiscordConnector {
       headers: {
         Authorization: `Bot ${this.#token}`,
         "Content-Type": "application/json",
-        "User-Agent": "AgentConnector (https://github.com/darkhorseprojects, 0.2.0)",
+        "User-Agent": "AgentConnector/0.2",
       },
       body: JSON.stringify({
         content: text,
-        message_reference: {
-          message_id: replyToMessageId,
-        },
-        allowed_mentions: {
-          parse: [],
-        },
+        message_reference: { message_id: replyToMessageId },
+        allowed_mentions: { parse: [] },
       }),
     });
   }
