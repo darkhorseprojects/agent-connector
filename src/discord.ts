@@ -1,6 +1,6 @@
 import type { ConnectorConfig } from "./config.ts";
 import { RequestQueue } from "./queue.ts";
-import { runAgent } from "./invoke.ts";
+import { runAgent, splitDiscordMessage } from "./invoke.ts";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 // GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) = 4609 (No privileged intent toggle required)
@@ -29,6 +29,7 @@ export class DiscordConnector {
   readonly #config: ConnectorConfig;
   readonly #agentName: string;
   readonly #queue = new RequestQueue(4, 32);
+  readonly #activeThreads = new Map<string, string>(); // threadId -> policyName
   #ws: WebSocket | null = null;
   #heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   #heartbeatAcked = true;
@@ -164,20 +165,29 @@ export class DiscordConnector {
       // Direct Message: normal response in DM
       policyName = this.#config.users[authorId];
       inputContent = msg.content || "";
+    } else if (this.#activeThreads.has(channelId)) {
+      // Continuing conversation inside an active thread: no @mention needed!
+      policyName = this.#activeThreads.get(channelId);
+      inputContent = msg.content || "";
+      createThreadForMessage = false;
     } else {
-      // Guild Message
+      // Guild Channel Message
       const stripped = stripBotMention(msg.content || "", this.#config.discord.bot);
 
       if (stripped !== null) {
-        // Ping in any channel: normal direct response in channel
+        // Explicit mention in any channel / thread
         inputContent = stripped;
         policyName = this.#config.channels[channelId] || this.#config.guilds[guildId];
+        // If mentioned inside a thread, remember it as an active thread
+        if (msg.thread !== undefined || msg.type === 11 || msg.type === 12) {
+          if (policyName) this.#activeThreads.set(channelId, policyName);
+        }
       } else if (this.#config.channels[channelId]) {
-        // Message in a configured channel (unmentioned): create thread
+        // Unmentioned message in a configured channel: spawn thread
         inputContent = msg.content || "";
         policyName = this.#config.channels[channelId];
-        // Only create thread if the message is not already inside a thread
-        createThreadForMessage = msg.thread === undefined && msg.type !== 11 && msg.type !== 12;
+        const isAlreadyThread = msg.thread !== undefined || msg.type === 11 || msg.type === 12;
+        createThreadForMessage = !isAlreadyThread;
       } else {
         // Unmentioned message in unconfigured channel: ignore
         return;
@@ -189,18 +199,31 @@ export class DiscordConnector {
 
     try {
       const response = await this.#queue.run(() => runAgent(policy, authorId, inputContent));
+      const chunks = splitDiscordMessage(response, 2000);
+
       if (createThreadForMessage) {
         const threadName = (inputContent.slice(0, 48).trim() || "Agent Conversation");
         const threadId = await this.#createThread(channelId, msg.id, threadName);
-        await this.#sendMessage(threadId || channelId, threadId ? undefined : msg.id, response);
+        const targetChannel = threadId || channelId;
+        if (threadId) {
+          this.#activeThreads.set(threadId, policyName);
+        }
+        for (let i = 0; i < chunks.length; i++) {
+          await this.#sendMessage(targetChannel, i === 0 && !threadId ? msg.id : undefined, chunks[i]);
+        }
       } else {
-        await this.#sendMessage(channelId, msg.id, response);
+        for (let i = 0; i < chunks.length; i++) {
+          await this.#sendMessage(channelId, i === 0 ? msg.id : undefined, chunks[i]);
+        }
       }
     } catch (err: any) {
-      const errMsg = err.message === "Agent Connector is busy." ? "Agent Connector is busy." : "An error occurred while processing the request.";
-      await this.#sendMessage(channelId, msg.id, errMsg);
-      if (err.message !== "Agent Connector is busy.") {
-        console.error("Execution error:", err);
+      const isBusy = err.message === "Agent Connector is busy.";
+      const errorText = isBusy
+        ? "Agent Connector is busy."
+        : `⚠️ ${this.#agentName} encountered an error:\n> ${err.message || "Unknown error"}`;
+      await this.#sendMessage(channelId, msg.id, errorText);
+      if (!isBusy) {
+        console.error(`[${this.#agentName}] Execution error:`, err);
       }
     }
   }
@@ -224,9 +247,7 @@ export class DiscordConnector {
         const thread = await res.json();
         return String(thread.id);
       }
-    } catch (_e) {
-      // Fall back to channel reply if thread creation fails
-    }
+    } catch (_e) {}
     return null;
   }
 

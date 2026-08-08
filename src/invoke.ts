@@ -4,6 +4,44 @@ import type { Policy } from "./config.ts";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
+export function splitDiscordMessage(text: string, maxChars = 2000): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.length <= maxChars) return [trimmed];
+
+  const chunks: string[] = [];
+  let remaining = trimmed;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxChars) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Try splitting on paragraph boundaries
+    let splitIdx = remaining.lastIndexOf("\n\n", maxChars);
+    if (splitIdx < maxChars * 0.3) {
+      // Try splitting on single line break
+      splitIdx = remaining.lastIndexOf("\n", maxChars);
+    }
+    if (splitIdx < maxChars * 0.3) {
+      // Try splitting on sentence or space
+      splitIdx = remaining.lastIndexOf(". ", maxChars);
+      if (splitIdx > 0) splitIdx += 1;
+      else splitIdx = remaining.lastIndexOf(" ", maxChars);
+    }
+    if (splitIdx <= 0) {
+      splitIdx = maxChars;
+    }
+
+    const chunk = remaining.slice(0, splitIdx).trim();
+    if (chunk) chunks.push(chunk);
+    remaining = remaining.slice(splitIdx).trimStart();
+  }
+
+  return chunks.length > 0 ? chunks : [trimmed.slice(0, maxChars)];
+}
+
 export async function checkAgent(policy: Policy, signal?: AbortSignal): Promise<void> {
   const agent = Agent.directory(policy.directory, policy.entry, {
     authority: policy.authority,
@@ -30,7 +68,7 @@ export async function runAgent(
   });
 
   if (outputBytes.length === 0) {
-    throw new Error("agent returned an empty result");
+    return "";
   }
 
   let text: string;
@@ -42,11 +80,6 @@ export async function runAgent(
 
   if (text.includes("\0")) {
     throw new Error("agent result contains NUL byte");
-  }
-
-  const charCount = Array.from(text).length;
-  if (charCount > 2000) {
-    throw new Error(`agent result exceeds Discord message limit (${charCount} > 2000 chars)`);
   }
 
   return text;
