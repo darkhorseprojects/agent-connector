@@ -53,7 +53,7 @@ const systemdProvider: ServiceProvider = {
             const out = await new Deno.Command("systemctl", { args: ["--user", "is-active", e.name] }).output();
             status = new TextDecoder().decode(out.stdout).trim() || "inactive";
           } catch (_e) {}
-          records.push({ id: e.name, dir: pkgDir, status });
+          records.push({ id: e.name.replace(/\.service$/, ""), dir: pkgDir, status });
         }
       }
     } catch (_e) {}
@@ -99,16 +99,49 @@ const launchdProvider: ServiceProvider = {
   },
 };
 
-const fallbackProvider: ServiceProvider = {
-  async add() { console.log("Autostart services are supported on Linux (systemd) and macOS (launchd)."); },
-  async remove() { console.log("Autostart services are supported on Linux (systemd) and macOS (launchd)."); },
-  async list() { return []; },
+const windowsStartupProvider: ServiceProvider = {
+  async add(id: string, canonical: string) {
+    const appdata = Deno.env.get("APPDATA") || join(home, "AppData", "Roaming");
+    const dir = join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+    await ensureDir(dir);
+    const cmdPath = join(dir, `agc-${id}.cmd`);
+    const script = `@echo off\nstart /b "" "${Deno.execPath()}" up --foreground "${canonical}"\n`;
+    await Deno.writeTextFile(cmdPath, script);
+    console.log(`✓ Added Windows Startup shortcut: ${cmdPath}`);
+  },
+
+  async remove(id: string) {
+    const appdata = Deno.env.get("APPDATA") || join(home, "AppData", "Roaming");
+    const cmdPath = join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `agc-${id}.cmd`);
+    try {
+      await Deno.remove(cmdPath);
+      console.log(`✓ Removed Windows Startup shortcut: agc-${id}.cmd`);
+    } catch (_e) {
+      console.log("Windows Startup shortcut was not registered.");
+    }
+  },
+
+  async list(): Promise<ServiceRecord[]> {
+    const appdata = Deno.env.get("APPDATA") || join(home, "AppData", "Roaming");
+    const dir = join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+    const records: ServiceRecord[] = [];
+    try {
+      for await (const e of Deno.readDir(dir)) {
+        if (e.isFile && e.name.startsWith("agc-") && e.name.endsWith(".cmd")) {
+          const content = await Deno.readTextFile(join(dir, e.name));
+          const match = content.match(/--foreground "(.+)"/);
+          records.push({ id: e.name.replace(/\.cmd$/, ""), dir: match ? match[1].trim() : "Unknown", status: "enabled" });
+        }
+      }
+    } catch (_e) {}
+    return records;
+  },
 };
 
 function getProvider(): ServiceProvider {
   if (Deno.build.os === "linux") return systemdProvider;
   if (Deno.build.os === "darwin") return launchdProvider;
-  return fallbackProvider;
+  return windowsStartupProvider;
 }
 
 export async function addAutostart(agentDir: string): Promise<void> {
@@ -184,11 +217,17 @@ async function handleIpc(conn: Deno.Conn, onStop: () => void) {
   const n = await conn.read(buf);
   const msg = n ? new TextDecoder().decode(buf.subarray(0, n)).trim() : "";
   if (msg === "STOP") {
-    await conn.write(new TextEncoder().encode("OK\n"));
+    try {
+      await conn.write(new TextEncoder().encode("OK\n"));
+    } catch (_e) {}
     conn.close();
     onStop();
+    // Guarantee clean process termination after acknowledging stop command
+    setTimeout(() => Deno.exit(0), 100);
   } else if (msg === "PING") {
-    await conn.write(new TextEncoder().encode("PONG\n"));
+    try {
+      await conn.write(new TextEncoder().encode("PONG\n"));
+    } catch (_e) {}
     conn.close();
   } else {
     conn.close();
@@ -212,13 +251,12 @@ async function sendIpcCommand(agentDir: string, cmd: string): Promise<string | n
   }
 }
 
-export async function stopDaemon(agentDir: string): Promise<void> {
+export async function stopDaemon(agentDir: string): Promise<boolean> {
   const res = await sendIpcCommand(agentDir, "STOP");
   if (res?.startsWith("OK")) {
-    console.log("Agent Connector stopped successfully.");
-  } else {
-    console.log("No running Agent Connector service found for this package.");
+    return true;
   }
+  return false;
 }
 
 export async function probeReady(agentDir: string, timeoutMs = 5000): Promise<boolean> {
