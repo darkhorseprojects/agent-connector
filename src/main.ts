@@ -20,6 +20,31 @@ async function resolveDir(arg?: string): Promise<string> {
   }
 }
 
+async function startForegroundService(dir: string) {
+  const config = await loadConfig(dir);
+  const token = await loadToken(dir);
+
+  const controller = new AbortController();
+  const shutdown = () => controller.abort();
+  Deno.addSignalListener("SIGINT", shutdown);
+  Deno.addSignalListener("SIGTERM", shutdown);
+
+  const connector = new DiscordConnector({
+    token, config, signal: controller.signal,
+    onReady: (u) => console.log(`Agent Connector ready! Connected as ${u}`),
+  });
+
+  const ipc = await startIpcServer(dir, shutdown);
+  await connector.start();
+  await new Promise<void>((resolve) => {
+    controller.signal.addEventListener("abort", () => {
+      connector.stop();
+      ipc?.close();
+      resolve();
+    });
+  });
+}
+
 const commands: Record<string, (args: string[]) => Promise<void>> = {
   async connect(args) {
     const dir = await resolveDir(args[0]);
@@ -42,41 +67,23 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     console.log("Configuration and all agent entries are ready.");
   },
 
-  async run(args) {
-    const dir = await resolveDir(args[0]);
-    const config = await loadConfig(dir);
-    const token = await loadToken(dir);
-
-    const controller = new AbortController();
-    const shutdown = () => controller.abort();
-    Deno.addSignalListener("SIGINT", shutdown);
-    Deno.addSignalListener("SIGTERM", shutdown);
-
-    const connector = new DiscordConnector({
-      token, config, signal: controller.signal,
-      onReady: (u) => console.log(`Agent Connector ready! Connected as ${u}`),
-    });
-
-    const ipc = await startIpcServer(dir, shutdown);
-    await connector.start();
-    await new Promise<void>((resolve) => {
-      controller.signal.addEventListener("abort", () => {
-        connector.stop();
-        ipc?.close();
-        resolve();
-      });
-    });
-  },
-
   async up(args) {
-    const dir = await resolveDir(args[0]);
+    const isForeground = args.includes("--foreground") || args.includes("-f");
+    const targetArg = args.find((a) => !a.startsWith("-"));
+    const dir = await resolveDir(targetArg);
+
     await loadConfig(dir);
     await loadToken(dir);
 
+    if (isForeground) {
+      await startForegroundService(dir);
+      return;
+    }
+
     const isCompiled = !Deno.execPath().match(/deno(\.exe)?$/i);
     const spawnArgs = isCompiled
-      ? ["run", dir]
-      : ["run", "--allow-all", import.meta.url, "run", dir];
+      ? ["up", "--foreground", dir]
+      : ["run", "--allow-all", import.meta.url, "up", "--foreground", dir];
 
     const child = new Deno.Command(Deno.execPath(), {
       args: spawnArgs,
@@ -85,19 +92,21 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     child.unref();
 
     if (!await probeReady(dir, 6000)) {
-      console.error("Daemon started but IPC ready probe timed out.");
+      console.error("Agent Connector started but IPC ready probe timed out.");
       Deno.exit(1);
     }
     console.log("Agent Connector started in background.");
   },
 
   async down(args) {
-    await stopDaemon(await resolveDir(args[0]));
+    const targetArg = args.find((a) => !a.startsWith("-"));
+    await stopDaemon(await resolveDir(targetArg));
   },
 
   async auto(args) {
     const sub = args[0] || "list";
-    const dir = await resolveDir(args[1]);
+    const targetArg = args[1];
+    const dir = await resolveDir(targetArg);
     if (sub === "add") await addAutostart(dir);
     else if (["remove", "rm", "delete"].includes(sub)) await removeAutostart(dir);
     else if (["list", "ls"].includes(sub)) await listAutostart();
@@ -116,8 +125,7 @@ async function main() {
 Usage:
   agc connect [DIR]       Interactive guided setup or configuration editor
   agc check [DIR]         Validate configuration and compile agent entry points
-  agc run [DIR]           Run foreground connector service
-  agc up [DIR]            Start detached background connector service
+  agc up [DIR]            Start background connector service (or pass -f for foreground)
   agc down [DIR]          Stop running background connector service
   agc auto add [DIR]      Register and enable system autostart service (systemd / launchd)
   agc auto remove [DIR]   Unregister and remove system autostart service

@@ -20,7 +20,7 @@ const systemdProvider: ServiceProvider = {
   async add(id: string, canonical: string) {
     const dir = join(home, ".config", "systemd", "user");
     await ensureDir(dir);
-    const unit = `[Unit]\nDescription=Agent Connector for ${canonical}\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=${Deno.execPath()} run ${canonical}\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
+    const unit = `[Unit]\nDescription=Agent Connector for ${canonical}\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=${Deno.execPath()} up --foreground ${canonical}\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
     await Deno.writeTextFile(join(dir, `agc-${id}.service`), unit);
     await new Deno.Command("systemctl", { args: ["--user", "daemon-reload"] }).output();
     await new Deno.Command("systemctl", { args: ["--user", "enable", "--now", `agc-${id}.service`] }).output();
@@ -66,7 +66,7 @@ const launchdProvider: ServiceProvider = {
     const dir = join(home, "Library", "LaunchAgents");
     await ensureDir(dir);
     const path = join(dir, `com.darkhorseprojects.agc.${id}.plist`);
-    const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.darkhorseprojects.agc.${id}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>${Deno.execPath()}</string>\n    <string>run</string>\n    <string>${canonical}</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>`;
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.darkhorseprojects.agc.${id}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>${Deno.execPath()}</string>\n    <string>up</string>\n    <string>--foreground</string>\n    <string>${canonical}</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>`;
     await Deno.writeTextFile(path, plist);
     await new Deno.Command("launchctl", { args: ["load", path] }).output();
     console.log(`✓ Loaded LaunchAgent: com.darkhorseprojects.agc.${id}`);
@@ -215,9 +215,9 @@ async function sendIpcCommand(agentDir: string, cmd: string): Promise<string | n
 export async function stopDaemon(agentDir: string): Promise<void> {
   const res = await sendIpcCommand(agentDir, "STOP");
   if (res?.startsWith("OK")) {
-    console.log("Agent Connector daemon stopped successfully.");
+    console.log("Agent Connector stopped successfully.");
   } else {
-    console.log("No running Agent Connector daemon found for this package.");
+    console.log("No running Agent Connector service found for this package.");
   }
 }
 

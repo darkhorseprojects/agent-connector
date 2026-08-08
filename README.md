@@ -78,13 +78,10 @@ Windows:      %LOCALAPPDATA%\Agent Connector\credentials\<sha256(canonical_path)
 # Validate configuration and compile package entry points
 agc check /path/to/agent
 
-# Run foreground connector service
-agc run /path/to/agent
-
-# Start detached background daemon
+# Start background connector service (or pass -f to run foreground)
 agc up /path/to/agent
 
-# Stop running background daemon
+# Stop running background connector service
 agc down /path/to/agent
 
 # Register and enable system autostart service (systemd user unit on Linux, launchd on macOS)
