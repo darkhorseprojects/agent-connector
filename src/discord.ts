@@ -3,8 +3,8 @@ import { RequestQueue } from "./queue.ts";
 import { runAgent } from "./invoke.ts";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) | MESSAGE_CONTENT (32768) = 37377
-const INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
+// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) = 4609 (No privileged intent toggle required)
+const INTENTS = (1 << 0) | (1 << 9) | (1 << 12);
 
 export interface DiscordGatewayOptions {
   token: string;
