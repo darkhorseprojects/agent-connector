@@ -138,6 +138,10 @@ export async function listAutostart(): Promise<void> {
 
 // ---------------------- Cross-Platform IPC ----------------------
 
+type IpcAddress =
+  | { transport: "unix"; path: string }
+  | { transport: "tcp"; hostname: string; port: number };
+
 export async function getSocketPath(agentDir: string): Promise<string> {
   const identity = await canonicalIdentity(agentDir);
   const socketDir = join(home, ".agents", "sockets");
@@ -145,9 +149,8 @@ export async function getSocketPath(agentDir: string): Promise<string> {
   return join(socketDir, `${identity}.sock`);
 }
 
-function getIpcAddress(agentDir: string, identity: string): Deno.ListenOptions {
+function getIpcAddress(_agentDir: string, identity: string): IpcAddress {
   if (Deno.build.os === "windows") {
-    // Deterministic loopback port from identity
     const port = 30000 + (parseInt(identity.slice(0, 4), 16) % 30000);
     return { transport: "tcp", hostname: "127.0.0.1", port };
   }
@@ -158,12 +161,16 @@ function getIpcAddress(agentDir: string, identity: string): Deno.ListenOptions {
 export async function startIpcServer(agentDir: string, onStop: () => void): Promise<Deno.Listener | null> {
   const identity = await canonicalIdentity(agentDir);
   const addr = getIpcAddress(agentDir, identity);
+  let listener: Deno.Listener;
+
   if (addr.transport === "unix") {
     try { await Deno.remove(addr.path); } catch (_e) {}
     await ensureDir(join(home, ".agents", "sockets"));
+    listener = Deno.listen({ transport: "unix", path: addr.path });
+  } else {
+    listener = Deno.listen({ transport: "tcp", hostname: addr.hostname, port: addr.port });
   }
 
-  const listener = Deno.listen(addr);
   (async () => {
     for await (const conn of listener) {
       handleIpc(conn, onStop).catch(() => {});
@@ -193,8 +200,8 @@ async function sendIpcCommand(agentDir: string, cmd: string): Promise<string | n
   const addr = getIpcAddress(agentDir, identity);
   try {
     const conn = addr.transport === "unix"
-      ? await Deno.connect({ path: addr.path, transport: "unix" })
-      : await Deno.connect({ hostname: addr.hostname, port: addr.port, transport: "tcp" });
+      ? await Deno.connect({ transport: "unix", path: addr.path })
+      : await Deno.connect({ transport: "tcp", hostname: addr.hostname, port: addr.port });
     await conn.write(new TextEncoder().encode(`${cmd}\n`));
     const buf = new Uint8Array(64);
     const n = await conn.read(buf);
