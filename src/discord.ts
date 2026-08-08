@@ -9,6 +9,7 @@ const INTENTS = (1 << 0) | (1 << 9) | (1 << 12);
 export interface DiscordGatewayOptions {
   token: string;
   config: ConnectorConfig;
+  agentName?: string;
   signal?: AbortSignal;
   onReady?: (user: string) => void;
 }
@@ -26,6 +27,7 @@ export function stripBotMention(content: string, botId: string): string | null {
 export class DiscordConnector {
   readonly #token: string;
   readonly #config: ConnectorConfig;
+  readonly #agentName: string;
   readonly #queue = new RequestQueue(4, 32);
   #ws: WebSocket | null = null;
   #heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -38,6 +40,7 @@ export class DiscordConnector {
   constructor(options: DiscordGatewayOptions) {
     this.#token = options.token;
     this.#config = options.config;
+    this.#agentName = options.agentName || "Agent";
     this.#signal = options.signal;
     this.#onReady = options.onReady;
   }
@@ -100,7 +103,17 @@ export class DiscordConnector {
       if (this.#sessionId && this.#sequence !== null) {
         this.#send(6, { token: this.#token, session_id: this.#sessionId, seq: this.#sequence }); // Resume
       } else {
-        this.#send(2, { token: this.#token, intents: INTENTS, properties: { os: Deno.build.os, browser: "AgentConnector", device: "AgentConnector" } }); // Identify
+        this.#send(2, {
+          token: this.#token,
+          intents: INTENTS,
+          properties: { os: Deno.build.os, browser: "AgentConnector", device: "AgentConnector" },
+          presence: {
+            status: "online",
+            activities: [{ name: this.#agentName, type: 0 }],
+            afk: false,
+            since: null,
+          },
+        }); // Identify
       }
     } else if (payload.op === 11) {
       this.#heartbeatAcked = true;
@@ -163,7 +176,7 @@ export class DiscordConnector {
         // Message in a configured channel (unmentioned): create thread
         inputContent = msg.content || "";
         policyName = this.#config.channels[channelId];
-        // Only create thread if the message is not already inside a thread (types 11/12 are threads)
+        // Only create thread if the message is not already inside a thread
         createThreadForMessage = msg.thread === undefined && msg.type !== 11 && msg.type !== 12;
       } else {
         // Unmentioned message in unconfigured channel: ignore
@@ -177,7 +190,7 @@ export class DiscordConnector {
     try {
       const response = await this.#queue.run(() => runAgent(policy, authorId, inputContent));
       if (createThreadForMessage) {
-        const threadName = (inputContent.slice(0, 48).trim() || "Agent Thread");
+        const threadName = (inputContent.slice(0, 48).trim() || "Agent Conversation");
         const threadId = await this.#createThread(channelId, msg.id, threadName);
         await this.#sendMessage(threadId || channelId, threadId ? undefined : msg.id, response);
       } else {

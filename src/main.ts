@@ -1,14 +1,21 @@
-import { parseConfig } from "./config.ts";
+import { parseConfig, type ConnectorConfig } from "./config.ts";
 import { loadToken, saveToken, validateToken, botInviteUrl } from "./credentials.ts";
 import { checkAgent } from "./invoke.ts";
 import { DiscordConnector } from "./discord.ts";
 import { startIpcServer, stopDaemon, probeReady, addAutostart, removeAutostart, listAutostart } from "./lifecycle.ts";
 import { setupNewConfig, editExistingConfig } from "./setup.ts";
-import { join, resolve } from "@std/path";
+import { basename, join, resolve } from "@std/path";
 
-async function loadConfig(dir: string) {
+async function loadConfig(dir: string): Promise<ConnectorConfig> {
   const file = join(dir, "agent-connector.yaml");
   return parseConfig(await Deno.readTextFile(file), dir);
+}
+
+function getAgentInfo(dir: string, config: ConnectorConfig): { name: string; entry: string } {
+  const firstPolicy = Object.keys(config.policies)[0] || "agent";
+  const policy = config.policies[firstPolicy];
+  const name = firstPolicy.charAt(0).toUpperCase() + firstPolicy.slice(1);
+  return { name, entry: policy?.entry || `${firstPolicy}.md` };
 }
 
 async function resolveDir(arg?: string): Promise<string> {
@@ -29,6 +36,7 @@ async function resolveDir(arg?: string): Promise<string> {
 async function startForegroundService(dir: string) {
   const config = await loadConfig(dir);
   const token = await loadToken(dir);
+  const { name, entry } = getAgentInfo(dir, config);
 
   const controller = new AbortController();
   const shutdown = () => controller.abort();
@@ -36,8 +44,11 @@ async function startForegroundService(dir: string) {
   Deno.addSignalListener("SIGTERM", shutdown);
 
   const connector = new DiscordConnector({
-    token, config, signal: controller.signal,
-    onReady: (u) => console.log(`Agent Connector ready! Connected as ${u}`),
+    token,
+    config,
+    agentName: name,
+    signal: controller.signal,
+    onReady: (u) => console.log(`✓ ${name} is online and connected as ${u} (${entry})`),
   });
 
   const ipc = await startIpcServer(dir, shutdown);
@@ -65,12 +76,14 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   async check(args) {
     const dir = await resolveDir(args[0]);
     const config = await loadConfig(dir);
-    console.log(`Validating ${Object.keys(config.policies).length} policies...`);
-    for (const [name, policy] of Object.entries(config.policies)) {
+    const { name, entry } = getAgentInfo(dir, config);
+    console.log(`Agent ${name} (${entry}) @ ${dir}`);
+    console.log(`Policies: ${Object.keys(config.policies).join(", ")}`);
+    for (const [pName, policy] of Object.entries(config.policies)) {
       await checkAgent(policy);
-      console.log(`  ✓ Policy '${name}' (${policy.entry}) is valid.`);
+      console.log(`  ✓ ${pName}: memory ${policy.memoryBytes / 1024 / 1024}MiB, timeout ${policy.timeoutMs / 1000}s`);
     }
-    console.log("Configuration and all agent entries are ready.");
+    console.log(`✓ All policy modules and models verified.`);
   },
 
   async up(args) {
@@ -78,8 +91,9 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     const targetArg = args.find((a) => !a.startsWith("-"));
     const dir = await resolveDir(targetArg);
 
-    await loadConfig(dir);
+    const config = await loadConfig(dir);
     await loadToken(dir);
+    const { name, entry } = getAgentInfo(dir, config);
 
     if (isForeground) {
       await startForegroundService(dir);
@@ -98,15 +112,22 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     child.unref();
 
     if (!await probeReady(dir, 6000)) {
-      console.error("Agent Connector started but IPC ready probe timed out.");
+      console.error(`Failed to start ${name} (IPC probe timed out).`);
       Deno.exit(1);
     }
-    console.log("Agent Connector started in background.");
+    console.log(`✓ ${name} (${entry}) started in background.`);
   },
 
   async down(args) {
     const targetArg = args.find((a) => !a.startsWith("-"));
-    await stopDaemon(await resolveDir(targetArg));
+    const dir = await resolveDir(targetArg);
+    let agentName = "Agent";
+    try {
+      const config = await loadConfig(dir);
+      agentName = getAgentInfo(dir, config).name;
+    } catch (_e) {}
+    await stopDaemon(dir);
+    console.log(`✓ ${agentName} stopped.`);
   },
 
   async auto(args) {
@@ -147,8 +168,9 @@ Usage:
     // Treat unknown first argument as package directory check
     const dir = await resolveDir(cmd);
     const config = await loadConfig(dir);
+    const { name, entry } = getAgentInfo(dir, config);
     for (const policy of Object.values(config.policies)) await checkAgent(policy);
-    console.log(`Agent Connector verified for ${dir}`);
+    console.log(`✓ ${name} (${entry}) verified for ${dir}`);
   }
 }
 
