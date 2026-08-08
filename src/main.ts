@@ -4,20 +4,25 @@ import { checkAgent } from "./invoke.ts";
 import { DiscordConnector } from "./discord.ts";
 import { startIpcServer, stopDaemon, probeReady, addAutostart, removeAutostart, listAutostart } from "./lifecycle.ts";
 import { setupNewConfig, editExistingConfig } from "./setup.ts";
-import { join } from "@std/path";
+import { join, resolve } from "@std/path";
 
 async function loadConfig(dir: string) {
   const file = join(dir, "agent-connector.yaml");
   return parseConfig(await Deno.readTextFile(file), dir);
 }
 
-function resolveDir(arg?: string): string {
-  return arg ? arg : Deno.cwd();
+async function resolveDir(arg?: string): Promise<string> {
+  const p = arg ? resolve(Deno.cwd(), arg) : Deno.cwd();
+  try {
+    return await Deno.realPath(p);
+  } catch (_e) {
+    return p;
+  }
 }
 
 const commands: Record<string, (args: string[]) => Promise<void>> = {
   async connect(args) {
-    const dir = resolveDir(args[0]);
+    const dir = await resolveDir(args[0]);
     try {
       await editExistingConfig(dir, await loadConfig(dir));
     } catch (e) {
@@ -27,7 +32,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   },
 
   async check(args) {
-    const dir = resolveDir(args[0]);
+    const dir = await resolveDir(args[0]);
     const config = await loadConfig(dir);
     console.log(`Validating ${Object.keys(config.policies).length} policies...`);
     for (const [name, policy] of Object.entries(config.policies)) {
@@ -38,7 +43,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   },
 
   async run(args) {
-    const dir = resolveDir(args[0]);
+    const dir = await resolveDir(args[0]);
     const config = await loadConfig(dir);
     const token = await loadToken(dir);
 
@@ -64,11 +69,17 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   },
 
   async up(args) {
-    const dir = resolveDir(args[0]);
+    const dir = await resolveDir(args[0]);
     await loadConfig(dir);
     await loadToken(dir);
+
+    const isCompiled = !Deno.execPath().match(/deno(\.exe)?$/i);
+    const spawnArgs = isCompiled
+      ? ["run", dir]
+      : ["run", "--allow-all", import.meta.url, "run", dir];
+
     const child = new Deno.Command(Deno.execPath(), {
-      args: ["run", "--allow-all", import.meta.url, "run", dir],
+      args: spawnArgs,
       stdout: "null", stderr: "null", stdin: "null",
     }).spawn();
     child.unref();
@@ -81,12 +92,12 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   },
 
   async down(args) {
-    await stopDaemon(resolveDir(args[0]));
+    await stopDaemon(await resolveDir(args[0]));
   },
 
   async auto(args) {
     const sub = args[0] || "list";
-    const dir = resolveDir(args[1]);
+    const dir = await resolveDir(args[1]);
     if (sub === "add") await addAutostart(dir);
     else if (["remove", "rm", "delete"].includes(sub)) await removeAutostart(dir);
     else if (["list", "ls"].includes(sub)) await listAutostart();
@@ -120,9 +131,10 @@ Usage:
     await handler(rest);
   } else {
     // Treat unknown first argument as package directory check
-    const config = await loadConfig(resolveDir(cmd));
+    const dir = await resolveDir(cmd);
+    const config = await loadConfig(dir);
     for (const policy of Object.values(config.policies)) await checkAgent(policy);
-    console.log(`Agent Connector verified for ${cmd}`);
+    console.log(`Agent Connector verified for ${dir}`);
   }
 }
 
