@@ -2,7 +2,10 @@ import { crypto } from "@std/crypto";
 import { join } from "@std/path";
 import { ensureDir } from "@std/fs";
 
-const PERMISSIONS = "274877909016"; // View Channels (1024) | Send Messages (2048) | Send Messages in Threads (274877906944)
+// Permissions: View Channels (1024) | Send Messages (2048) | Read Message History (65536)
+// Embed Links (16384) | Attach Files (32768) | Add Reactions (64) | Use External Emojis (262144)
+// Create Public Threads (34359738368) | Create Private Threads (68719476736) | Send Messages in Threads (274877906944)
+const PERMISSIONS = "377957530432";
 
 export async function canonicalIdentity(dirPath: string): Promise<string> {
   const canonical = await Deno.realPath(dirPath);
@@ -83,5 +86,5 @@ export async function validateToken(
 }
 
 export function botInviteUrl(appId: string): string {
-  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(appId)}&permissions=${PERMISSIONS}&scope=bot`;
+  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(appId)}&permissions=${PERMISSIONS}&scope=bot%20applications.commands`;
 }

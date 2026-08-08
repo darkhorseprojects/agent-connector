@@ -3,7 +3,8 @@ import { RequestQueue } from "./queue.ts";
 import { runAgent } from "./invoke.ts";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-const INTENTS = (1 << 0) | (1 << 9) | (1 << 12); // GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES = 4609
+// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) | MESSAGE_CONTENT (32768) = 37377
+const INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 
 export interface DiscordGatewayOptions {
   token: string;
@@ -144,15 +145,30 @@ export class DiscordConnector {
 
     let inputContent: string;
     let policyName: string | undefined;
+    let createThreadForMessage = false;
 
     if (!guildId) {
+      // Direct Message: normal response in DM
       policyName = this.#config.users[authorId];
       inputContent = msg.content || "";
     } else {
+      // Guild Message
       const stripped = stripBotMention(msg.content || "", this.#config.discord.bot);
-      if (stripped === null) return;
-      inputContent = stripped;
-      policyName = this.#config.channels[channelId] || this.#config.guilds[guildId];
+
+      if (stripped !== null) {
+        // Ping in any channel: normal direct response in channel
+        inputContent = stripped;
+        policyName = this.#config.channels[channelId] || this.#config.guilds[guildId];
+      } else if (this.#config.channels[channelId]) {
+        // Message in a configured channel (unmentioned): create thread
+        inputContent = msg.content || "";
+        policyName = this.#config.channels[channelId];
+        // Only create thread if the message is not already inside a thread (types 11/12 are threads)
+        createThreadForMessage = msg.thread === undefined && msg.type !== 11 && msg.type !== 12;
+      } else {
+        // Unmentioned message in unconfigured channel: ignore
+        return;
+      }
     }
 
     if (!policyName || !this.#config.policies[policyName]) return;
@@ -160,18 +176,57 @@ export class DiscordConnector {
 
     try {
       const response = await this.#queue.run(() => runAgent(policy, authorId, inputContent));
-      await this.#sendMessage(channelId, msg.id, response);
-    } catch (err: any) {
-      if (err.message === "Agent Connector is busy.") {
-        await this.#sendMessage(channelId, msg.id, "Agent Connector is busy.");
+      if (createThreadForMessage) {
+        const threadName = (inputContent.slice(0, 48).trim() || "Agent Thread");
+        const threadId = await this.#createThread(channelId, msg.id, threadName);
+        await this.#sendMessage(threadId || channelId, threadId ? undefined : msg.id, response);
       } else {
+        await this.#sendMessage(channelId, msg.id, response);
+      }
+    } catch (err: any) {
+      const errMsg = err.message === "Agent Connector is busy." ? "Agent Connector is busy." : "An error occurred while processing the request.";
+      await this.#sendMessage(channelId, msg.id, errMsg);
+      if (err.message !== "Agent Connector is busy.") {
         console.error("Execution error:", err);
       }
     }
   }
 
-  async #sendMessage(channelId: string, replyToMessageId: string, text: string): Promise<void> {
+  async #createThread(channelId: string, messageId: string, name: string): Promise<string | null> {
+    try {
+      const url = `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/threads`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${this.#token}`,
+          "Content-Type": "application/json",
+          "User-Agent": "AgentConnector/0.2",
+        },
+        body: JSON.stringify({
+          name: name.slice(0, 100),
+          auto_archive_duration: 60,
+        }),
+      });
+      if (res.ok) {
+        const thread = await res.json();
+        return String(thread.id);
+      }
+    } catch (_e) {
+      // Fall back to channel reply if thread creation fails
+    }
+    return null;
+  }
+
+  async #sendMessage(channelId: string, replyToMessageId: string | undefined, text: string): Promise<void> {
     const url = `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`;
+    const payload: Record<string, unknown> = {
+      content: text,
+      allowed_mentions: { parse: [] },
+    };
+    if (replyToMessageId) {
+      payload.message_reference = { message_id: replyToMessageId };
+    }
+
     await fetch(url, {
       method: "POST",
       headers: {
@@ -179,11 +234,7 @@ export class DiscordConnector {
         "Content-Type": "application/json",
         "User-Agent": "AgentConnector/0.2",
       },
-      body: JSON.stringify({
-        content: text,
-        message_reference: { message_id: replyToMessageId },
-        allowed_mentions: { parse: [] },
-      }),
+      body: JSON.stringify(payload),
     });
   }
 }
