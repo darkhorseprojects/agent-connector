@@ -5,8 +5,8 @@ import { splitDiscordMessage, deriveThreadTitle } from "./format.ts";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const API_BASE = "https://discord.com/api/v10";
-// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) = 4609
-const INTENTS = (1 << 0) | (1 << 9) | (1 << 12);
+// GUILDS (1) | GUILD_MESSAGES (512) | DIRECT_MESSAGES (4096) | MESSAGE_CONTENT (32768) = 37377
+const INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 
 export interface DiscordGatewayOptions {
   token: string;
@@ -217,7 +217,8 @@ export class DiscordConnector {
     } else if (this.#activeThreads.has(channelId)) {
       // Seamless conversation continuation inside active thread
       policyName = this.#activeThreads.get(channelId);
-      inputContent = msg.content || "";
+      const stripped = stripBotMention(msg.content || "", this.#config.discord.bot);
+      inputContent = (stripped !== null ? stripped : msg.content) || "";
       createThreadForMessage = false;
     } else {
       // Guild Channel
@@ -239,6 +240,7 @@ export class DiscordConnector {
       }
     }
 
+    if (!inputContent || !inputContent.trim()) return;
     if (!policyName || !this.#config.policies[policyName]) return;
     const policy = this.#config.policies[policyName];
 
