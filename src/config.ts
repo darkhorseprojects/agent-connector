@@ -1,5 +1,4 @@
-import { parse as parseYaml } from "@std/yaml";
-import { resolve } from "@std/path";
+import { parse as parseYaml, stringify as stringifyYaml } from "@std/yaml";
 
 export type Policy = Readonly<{
   entry: string;
@@ -41,6 +40,13 @@ export function parseMemory(value: string): number {
   return amount * multiplier;
 }
 
+export function formatMemory(bytes: number): string {
+  if (bytes % (1024 * 1024 * 1024) === 0) return `${bytes / (1024 * 1024 * 1024)}GiB`;
+  if (bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)}MiB`;
+  if (bytes % 1024 === 0) return `${bytes / 1024}KiB`;
+  return `${bytes}B`;
+}
+
 export function parseTimeout(value: string): number {
   const match = value.trim().match(/^(\d+)\s*(ms|s|m|h)?$/i);
   if (!match) throw new TypeError(`invalid timeout format: ${value}`);
@@ -56,7 +62,41 @@ export function parseTimeout(value: string): number {
   return amount * multipliers[unit];
 }
 
-export function parseConfig(yamlSource: string, packageDir: string): ConnectorConfig {
+export function formatTimeout(ms: number): string {
+  if (ms % (3600 * 1000) === 0) return `${ms / (3600 * 1000)}h`;
+  if (ms % (60 * 1000) === 0) return `${ms / (60 * 1000)}m`;
+  if (ms % 1000 === 0) return `${ms / 1000}s`;
+  return `${ms}ms`;
+}
+
+export function serializeConfig(config: ConnectorConfig): string {
+  const policiesObj: Record<string, unknown> = {};
+  for (const [name, pol] of Object.entries(config.policies)) {
+    policiesObj[name] = {
+      entry: pol.entry,
+      authority: [...pol.authority],
+      directory: pol.directory,
+      memory: formatMemory(pol.memoryBytes),
+      timeout: formatTimeout(pol.timeoutMs),
+    };
+  }
+
+  const raw: Record<string, unknown> = {
+    version: 1,
+    discord: {
+      application: config.discord.application,
+      bot: config.discord.bot,
+    },
+    policies: policiesObj,
+    users: { ...config.users },
+    channels: { ...config.channels },
+    guilds: { ...config.guilds },
+  };
+
+  return stringifyYaml(raw);
+}
+
+export function parseConfig(yamlSource: string, packageDir?: string): ConnectorConfig {
   const raw = parseYaml(yamlSource) as Record<string, unknown>;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new TypeError("configuration root must be a YAML object");

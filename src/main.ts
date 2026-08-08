@@ -3,6 +3,7 @@ import { loadToken, saveToken, validateToken, botInviteUrl } from "./credentials
 import { checkAgent } from "./invoke.ts";
 import { DiscordConnector } from "./discord.ts";
 import { startIpcServer, stopDaemon, probeReady, configureAutostart } from "./lifecycle.ts";
+import { setupNewConfig, editExistingConfig } from "./setup.ts";
 import { join } from "@std/path";
 
 async function loadAgentConfig(dir: string) {
@@ -15,15 +16,6 @@ function resolveDir(argDir?: string): string {
   return argDir ? argDir : Deno.cwd();
 }
 
-async function promptSecret(promptText: string): Promise<string> {
-  const buf = new Uint8Array(1024);
-  Deno.stdout.writeSync(new TextEncoder().encode(promptText));
-  // Read token from stdin
-  const n = await Deno.stdin.read(buf);
-  if (!n) return "";
-  return new TextDecoder().decode(buf.subarray(0, n)).trim();
-}
-
 async function main() {
   const args = Deno.args;
   const command = args[0] || "check";
@@ -32,7 +24,7 @@ async function main() {
     console.log(`Agent Connector (TypeScript / Portable Agents)
 
 Usage:
-  agc connect [DIR]       Prompt and securely connect Discord bot token
+  agc connect [DIR]       Interactive guided setup or configuration editor
   agc check [DIR]         Validate configuration and compile agent entry points
   agc run [DIR]           Run foreground connector service
   agc up [DIR]            Start detached background connector service
@@ -45,17 +37,17 @@ Usage:
 
   if (command === "connect") {
     const dir = resolveDir(args[1]);
-    const config = await loadAgentConfig(dir);
-    const token = await promptSecret("Enter Discord Bot Token: ");
-    if (!token) {
-      console.error("Token is required.");
-      Deno.exit(1);
+    const configFile = join(dir, "agent-connector.yaml");
+    try {
+      const config = await loadAgentConfig(dir);
+      await editExistingConfig(dir, config);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        await setupNewConfig(dir);
+      } else {
+        throw error;
+      }
     }
-    const info = await validateToken(token, config.discord.bot, config.discord.application);
-    const path = await saveToken(dir, token);
-    console.log(`\nSuccessfully connected bot: ${info.botName}`);
-    console.log(`Stored credential securely at: ${path}`);
-    console.log(`\nBot Installation URL:\n${botInviteUrl(config.discord.application)}\n`);
     return;
   }
 
