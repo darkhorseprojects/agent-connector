@@ -1,81 +1,146 @@
+import { isAbsolute } from "@std/path";
 import { parse as parseYaml, stringify as stringifyYaml } from "@std/yaml";
 
 export type Policy = Readonly<{
   entry: string;
-  authority: readonly string[];
+  register: Readonly<Record<string, string>>;
+  authorize: readonly string[];
   directory: string;
-  memoryBytes: number;
-  timeoutMs: number;
+  memory: string;
+  timeout: string;
+}>;
+
+export type ConnectorLimits = Readonly<{
+  pendingRequests: number;
+  pendingPerActor: number;
+  eventBytes: number;
+  outputBytes: number;
+  outputMessages: number;
+  rpcBytes: number;
 }>;
 
 export type ConnectorConfig = Readonly<{
   version: 1;
   discord: Readonly<{ application: string; bot: string }>;
+  concurrency: number;
+  limits: ConnectorLimits;
   policies: Readonly<Record<string, Policy>>;
   users: Readonly<Record<string, string>>;
   channels: Readonly<Record<string, string>>;
   guilds: Readonly<Record<string, string>>;
 }>;
 
-const MEM_UNITS: Record<string, number> = {
-  B: 1, KIB: 1024, MIB: 1024 ** 2, GIB: 1024 ** 3,
-  KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3,
-};
+const SNOWFLAKE = /^\d{17,20}$/;
+const MODULE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
-const TIME_UNITS: Record<string, number> = {
-  ms: 1, s: 1000, m: 60 * 1000, h: 3600 * 1000,
-};
+export function parseConfig(source: string): ConnectorConfig {
+  const root = object(parseYaml(source), "configuration root");
+  exact(
+    root,
+    ["version", "discord", "concurrency", "limits", "policies", "users", "channels", "guilds"],
+    "configuration",
+  );
+  if (root.version !== 1) throw new TypeError(`unsupported version: ${String(root.version)}`);
 
-export function parseMemory(val: string): number {
-  const m = val.trim().match(/^(\d+)\s*(B|KiB|MiB|GiB|KB|MB|GB)?$/i);
-  if (!m) throw new TypeError(`invalid memory format: ${val}`);
-  const amount = Number(m[1]);
-  const mult = MEM_UNITS[(m[2] || "B").toUpperCase()];
-  if (!Number.isSafeInteger(amount) || amount <= 0 || !mult) {
-    throw new RangeError(`invalid memory value: ${val}`);
+  const rawDiscord = object(root.discord, "discord");
+  exact(rawDiscord, ["application", "bot"], "discord");
+  const discord = Object.freeze({
+    application: snowflake(rawDiscord.application, "discord.application"),
+    bot: snowflake(rawDiscord.bot, "discord.bot"),
+  });
+  const concurrency = positiveInteger(root.concurrency, "concurrency");
+  const rawLimits = object(root.limits, "limits");
+  exact(
+    rawLimits,
+    ["pending_requests", "pending_per_actor", "event_bytes", "output_bytes", "output_messages", "rpc_bytes"],
+    "limits",
+  );
+  const limits = Object.freeze({
+    pendingRequests: positiveInteger(rawLimits.pending_requests, "limits.pending_requests"),
+    pendingPerActor: positiveInteger(rawLimits.pending_per_actor, "limits.pending_per_actor"),
+    eventBytes: positiveInteger(rawLimits.event_bytes, "limits.event_bytes"),
+    outputBytes: positiveInteger(rawLimits.output_bytes, "limits.output_bytes"),
+    outputMessages: positiveInteger(rawLimits.output_messages, "limits.output_messages"),
+    rpcBytes: positiveInteger(rawLimits.rpc_bytes, "limits.rpc_bytes"),
+  });
+  if (limits.pendingPerActor > limits.pendingRequests) {
+    throw new TypeError("limits.pending_per_actor cannot exceed limits.pending_requests");
   }
-  return amount * mult;
-}
-
-export function formatMemory(b: number): string {
-  if (b % (1024 ** 3) === 0) return `${b / 1024 ** 3}GiB`;
-  if (b % (1024 ** 2) === 0) return `${b / 1024 ** 2}MiB`;
-  if (b % 1024 === 0) return `${b / 1024}KiB`;
-  return `${b}B`;
-}
-
-export function parseTimeout(val: string): number {
-  const m = val.trim().match(/^(\d+)\s*(ms|s|m|h)?$/i);
-  if (!m) throw new TypeError(`invalid timeout format: ${val}`);
-  const amount = Number(m[1]);
-  const mult = TIME_UNITS[(m[2] || "s").toLowerCase()];
-  if (!Number.isSafeInteger(amount) || amount <= 0 || !mult) {
-    throw new RangeError(`invalid timeout value: ${val}`);
+  const rawPolicies = object(root.policies, "policies");
+  if (!Object.keys(rawPolicies).length) throw new TypeError("at least one policy must be defined");
+  const policies: Record<string, Policy> = Object.create(null);
+  for (const [name, value] of Object.entries(rawPolicies)) {
+    safeKey(name, "policy");
+    const policy = object(value, `policy '${name}'`);
+    exact(policy, ["entry", "register", "authorize", "directory", "memory", "timeout"], `policy '${name}'`);
+    const directory = text(policy.directory, `policy '${name}' directory`);
+    if (!isAbsolute(directory)) throw new TypeError(`policy '${name}' directory must be absolute: ${directory}`);
+    const register: Record<string, string> = Object.create(null);
+    for (const [module, path] of Object.entries(object(policy.register, `policy '${name}' register`))) {
+      moduleName(module, `policy '${name}' registration`);
+      register[module] = sourcePath(path, `policy '${name}' register.${module}`, true);
+    }
+    const authorize = array(policy.authorize, `policy '${name}' authorize`).map((value, index) =>
+      moduleName(value, `policy '${name}' authorize[${index}]`)
+    );
+    policies[name] = Object.freeze({
+      entry: sourcePath(policy.entry, `policy '${name}' entry`, false),
+      register: Object.freeze(register),
+      authorize: Object.freeze(authorize),
+      directory,
+      memory: text(policy.memory, `policy '${name}' memory`),
+      timeout: text(policy.timeout, `policy '${name}' timeout`),
+    });
   }
-  return amount * mult;
-}
 
-export function formatTimeout(ms: number): string {
-  if (ms % 3600000 === 0) return `${ms / 3600000}h`;
-  if (ms % 60000 === 0) return `${ms / 60000}m`;
-  if (ms % 1000 === 0) return `${ms / 1000}s`;
-  return `${ms}ms`;
+  const routes = (value: unknown, name: string): Readonly<Record<string, string>> => {
+    const mapping = object(value, name);
+    const result: Record<string, string> = Object.create(null);
+    for (const [id, target] of Object.entries(mapping)) {
+      snowflake(id, `${name} key`);
+      const policy = text(target, `${name}.${id}`);
+      if (!Object.hasOwn(policies, policy)) throw new TypeError(`${name} references unknown policy: ${policy}`);
+      result[id] = policy;
+    }
+    return Object.freeze(result);
+  };
+
+  return Object.freeze({
+    version: 1,
+    discord,
+    concurrency,
+    limits,
+    policies: Object.freeze(policies),
+    users: routes(root.users, "users"),
+    channels: routes(root.channels, "channels"),
+    guilds: routes(root.guilds, "guilds"),
+  });
 }
 
 export function serializeConfig(config: ConnectorConfig): string {
-  const policies: Record<string, unknown> = {};
-  for (const [name, p] of Object.entries(config.policies)) {
+  const policies: Record<string, unknown> = Object.create(null);
+  for (const [name, policy] of Object.entries(config.policies)) {
     policies[name] = {
-      entry: p.entry,
-      authority: [...p.authority],
-      directory: p.directory,
-      memory: formatMemory(p.memoryBytes),
-      timeout: formatTimeout(p.timeoutMs),
+      entry: policy.entry,
+      register: { ...policy.register },
+      authorize: [...policy.authorize],
+      directory: policy.directory,
+      memory: policy.memory,
+      timeout: policy.timeout,
     };
   }
   return stringifyYaml({
     version: 1,
-    discord: { application: config.discord.application, bot: config.discord.bot },
+    discord: config.discord,
+    concurrency: config.concurrency,
+    limits: {
+      pending_requests: config.limits.pendingRequests,
+      pending_per_actor: config.limits.pendingPerActor,
+      event_bytes: config.limits.eventBytes,
+      output_bytes: config.limits.outputBytes,
+      output_messages: config.limits.outputMessages,
+      rpc_bytes: config.limits.rpcBytes,
+    },
     policies,
     users: { ...config.users },
     channels: { ...config.channels },
@@ -83,66 +148,60 @@ export function serializeConfig(config: ConnectorConfig): string {
   });
 }
 
-export function parseConfig(yamlSource: string, _packageDir?: string): ConnectorConfig {
-  const raw = parseYaml(yamlSource) as Record<string, unknown>;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new TypeError("configuration root must be a YAML object");
+function object(value: unknown, name: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${name} must be an object`);
   }
+  return value as Record<string, unknown>;
+}
 
-  const allowed = new Set(["version", "discord", "policies", "users", "channels", "guilds"]);
-  for (const k of Object.keys(raw)) {
-    if (!allowed.has(k)) throw new TypeError(`unknown configuration key: ${k}`);
+function array(value: unknown, name: string): unknown[] {
+  if (!Array.isArray(value)) throw new TypeError(`${name} must be an array`);
+  return value;
+}
+
+function exact(value: Record<string, unknown>, allowed: readonly string[], name: string): void {
+  const keys = new Set(allowed);
+  for (const key of Object.keys(value)) if (!keys.has(key)) throw new TypeError(`unknown ${name} key: ${key}`);
+}
+
+function text(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value || value.includes("\0")) {
+    throw new TypeError(`${name} must be nonempty text without NUL`);
   }
-  if (raw.version !== 1) throw new TypeError(`unsupported version: ${raw.version}`);
+  return value;
+}
 
-  const discord = raw.discord as Record<string, unknown>;
-  if (!discord || typeof discord.application !== "string" || typeof discord.bot !== "string") {
-    throw new TypeError("discord section must define application and bot IDs as strings");
+function moduleName(value: unknown, name: string): string {
+  const result = text(value, name);
+  if (!MODULE.test(result)) throw new TypeError(`${name} must be dotted Lua identifiers`);
+  return result;
+}
+
+function snowflake(value: unknown, name: string): string {
+  const result = text(value, name);
+  if (!SNOWFLAKE.test(result)) throw new TypeError(`${name} must be a Discord snowflake`);
+  return result;
+}
+
+function sourcePath(value: unknown, name: string, absolute: boolean): string {
+  const path = text(value, name);
+  if (isAbsolute(path)) {
+    if (!absolute) throw new TypeError(`${name} must be package-relative`);
+  } else if (path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new TypeError(`${name} must be an exact package path`);
   }
+  if (!path.endsWith(".lua") && !path.endsWith(".md")) throw new TypeError(`${name} must end in .lua or .md`);
+  return path;
+}
 
-  const rawPolicies = (raw.policies || {}) as Record<string, Record<string, unknown>>;
-  if (!rawPolicies || typeof rawPolicies !== "object" || Object.keys(rawPolicies).length === 0) {
-    throw new TypeError("at least one policy must be defined");
+function positiveInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new TypeError(`${name} must be a positive integer`);
+  return value as number;
+}
+
+function safeKey(value: string, name: string): void {
+  if (!value || value === "__proto__" || value === "constructor" || value === "prototype") {
+    throw new TypeError(`invalid ${name} name: ${value}`);
   }
-
-  const policies: Record<string, Policy> = {};
-  for (const [name, p] of Object.entries(rawPolicies)) {
-    if (!p || typeof p.entry !== "string" || typeof p.directory !== "string") {
-      throw new TypeError(`policy '${name}' must define entry and directory`);
-    }
-    if (!p.directory.startsWith("/")) {
-      throw new TypeError(`policy '${name}' directory must be an absolute path: ${p.directory}`);
-    }
-    const authority = Array.isArray(p.authority) ? p.authority.map(String) : [];
-    policies[name] = Object.freeze({
-      entry: p.entry,
-      authority: Object.freeze(authority),
-      directory: p.directory,
-      memoryBytes: typeof p.memory === "string" ? parseMemory(p.memory) : 96 * 1024 * 1024,
-      timeoutMs: typeof p.timeout === "string" ? parseTimeout(p.timeout) : 30_000,
-    });
-  }
-
-  const validateRouting = (mapping: unknown, kind: string): Record<string, string> => {
-    if (!mapping) return {};
-    if (typeof mapping !== "object" || Array.isArray(mapping)) {
-      throw new TypeError(`${kind} must be a mapping of IDs to policy names`);
-    }
-    const res: Record<string, string> = {};
-    for (const [id, pol] of Object.entries(mapping as Record<string, unknown>)) {
-      const p = String(pol);
-      if (!policies[p]) throw new TypeError(`${kind} references non-existent policy: ${p}`);
-      res[String(id)] = p;
-    }
-    return Object.freeze(res);
-  };
-
-  return Object.freeze({
-    version: 1,
-    discord: Object.freeze({ application: String(discord.application), bot: String(discord.bot) }),
-    policies: Object.freeze(policies),
-    users: validateRouting(raw.users, "users"),
-    channels: validateRouting(raw.channels, "channels"),
-    guilds: validateRouting(raw.guilds, "guilds"),
-  });
 }

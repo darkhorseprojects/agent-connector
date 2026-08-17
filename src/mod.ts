@@ -1,8 +1,9 @@
-export { parseConfig, serializeConfig, parseMemory, parseTimeout, formatMemory, formatTimeout } from "./config.ts";
-export type { ConnectorConfig, Policy } from "./config.ts";
-export { DiscordConnector, stripBotMention } from "./discord.ts";
-export { RequestQueue } from "./queue.ts";
-export { checkAgent, runAgent } from "./invoke.ts";
-export { loadToken, saveToken, validateToken, botInviteUrl, canonicalIdentity } from "./credentials.ts";
-export { getSocketPath, startIpcServer, stopDaemon, probeReady, addAutostart, removeAutostart, listAutostart } from "./lifecycle.ts";
-export { setupNewConfig, editExistingConfig, discoverFiles, selectPolicy } from "./setup.ts";
+export { parseConfig, serializeConfig } from "./config.ts";
+export type { ConnectorConfig, ConnectorLimits, Policy } from "./config.ts";
+export { route, stripBotMention } from "./route.ts";
+export type { IncomingMessage, RoutedRequest } from "./route.ts";
+export { Scheduler, SchedulerCapacityError } from "./runtime/scheduler.ts";
+export { DiscordConnector } from "./connector.ts";
+export { checkAgent, runAgent } from "./runtime/invoke.ts";
+export { botInviteUrl, loadToken, saveToken, validateToken } from "./discord/credentials.ts";
+export { deriveThreadTitle, splitDiscordMessage } from "./discord/format.ts";

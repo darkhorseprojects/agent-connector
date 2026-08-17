@@ -1,61 +1,84 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { parseConfig, parseMemory, parseTimeout } from "../src/config.ts";
+import { parseConfig } from "../src/config.ts";
 
-Deno.test("config: parse valid memory and timeout", () => {
-  assertEquals(parseMemory("96MiB"), 96 * 1024 * 1024);
-  assertEquals(parseMemory("1GiB"), 1024 * 1024 * 1024);
-  assertEquals(parseMemory("500KB"), 500 * 1000);
-  assertEquals(parseTimeout("30s"), 30_000);
-  assertEquals(parseTimeout("2m"), 120_000);
-  assertEquals(parseTimeout("500ms"), 500);
-});
+const directory = Deno.build.os === "windows" ? "C:\\agents\\zinc" : "/opt/agents/zinc";
 
-Deno.test("config: parse strict agent-connector.yaml", () => {
-  const yaml = `
+function source(extra = ""): string {
+  return `
 version: 1
 discord:
-  application: "123456789"
-  bot: "987654321"
+  application: "123456789012345678"
+  bot: "234567890123456789"
+concurrency: 4
+limits:
+  pending_requests: 64
+  pending_per_actor: 4
+  event_bytes: 1048576
+  output_bytes: 8388608
+  output_messages: 64
+  rpc_bytes: 8388608
 policies:
   zinc:
     entry: zinc.md
-    authority:
-      - src/store.lua
-      - src/llamacpp.lua
-    directory: /home/colin/dev/zinc
+    register:
+      host: host.md
+      design: design.md
+      discord: /opt/agent-connector/registrations/discord.md
+    authorize: [src.host, src.models, src.store, discord]
+    directory: ${JSON.stringify(directory)}
     memory: 96MiB
     timeout: 30s
 users:
-  "111": zinc
+  "345678901234567890": zinc
 channels:
-  "222": zinc
+  "456789012345678901": zinc
 guilds:
-  "333": zinc
-`;
+  "567890123456789012": zinc
+${extra}`;
+}
 
-  const config = parseConfig(yaml, "/home/colin/dev/zinc");
-  assertEquals(config.version, 1);
-  assertEquals(config.discord.application, "123456789");
-  assertEquals(config.discord.bot, "987654321");
-  assertEquals(config.policies.zinc.entry, "zinc.md");
-  assertEquals(config.policies.zinc.directory, "/home/colin/dev/zinc");
-  assertEquals(config.policies.zinc.memoryBytes, 96 * 1024 * 1024);
-  assertEquals(config.policies.zinc.timeoutMs, 30_000);
-  assertEquals(config.users["111"], "zinc");
-  assertEquals(config.channels["222"], "zinc");
-  assertEquals(config.guilds["333"], "zinc");
+Deno.test("config parses exact explicit v1 data", () => {
+  const config = parseConfig(source());
+  assertEquals(config.concurrency, 4);
+  assertEquals(config.limits, {
+    pendingRequests: 64,
+    pendingPerActor: 4,
+    eventBytes: 1_048_576,
+    outputBytes: 8_388_608,
+    outputMessages: 64,
+    rpcBytes: 8_388_608,
+  });
+  assertEquals(config.policies.zinc.directory, directory);
+  assertEquals(config.policies.zinc.memory, "96MiB");
+  assertEquals(config.policies.zinc.timeout, "30s");
+  assertEquals(config.policies.zinc.register.host, "host.md");
+  assertEquals(config.policies.zinc.authorize, ["src.host", "src.models", "src.store", "discord"]);
 });
 
-Deno.test("config: reject relative policy directory", () => {
-  const yaml = `
-version: 1
-discord:
-  application: "1"
-  bot: "2"
-policies:
-  test:
-    entry: test.md
-    directory: ./relative/path
-`;
-  assertThrows(() => parseConfig(yaml, "/pkg"), TypeError, "directory must be an absolute path");
+Deno.test("config rejects unknown, implicit, and unsafe values", () => {
+  assertThrows(() => parseConfig(source("unknown: true")), TypeError, "unknown configuration key");
+  assertThrows(
+    () => parseConfig(source().replace("entry: zinc.md", "entry: ../zinc.md")),
+    TypeError,
+    "exact package path",
+  );
+  assertThrows(() => parseConfig(source().replace("concurrency: 4", "concurrency: 0")), TypeError, "positive integer");
+  assertThrows(
+    () => parseConfig(source().replace("  pending_requests: 64", "  pending_requests: 0")),
+    TypeError,
+    "positive integer",
+  );
+  assertThrows(
+    () => parseConfig(source().replace("  pending_per_actor: 4", "  pending_per_actor: 65")),
+    TypeError,
+    "cannot exceed",
+  );
+  assertThrows(() => parseConfig(source().replace("345678901234567890", "short")), TypeError, "snowflake");
+  assertThrows(() => parseConfig(source().replace("host: host.md", "bad-name!: host.md")), TypeError, "dotted Lua");
+  assertThrows(
+    () => parseConfig(source().replace(JSON.stringify(directory), JSON.stringify("relative"))),
+    TypeError,
+    "absolute",
+  );
+  assertThrows(() => parseConfig(source().replace("    memory: 96MiB\n", "")), TypeError, "memory");
 });

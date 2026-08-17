@@ -1,17 +1,23 @@
 {
   "name": "@darkhorseprojects/agent-connector",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "exports": "./src/mod.ts",
+  "license": "AGPL-3.0-only",
+  "links": ["../portable-agents/sdk"],
   "tasks": {
-    "test": "deno test --allow-read --allow-write --allow-env --allow-net",
-    "compile": "deno compile --allow-read --allow-write --allow-net --allow-run --allow-env --output bin/agc src/main.ts"
+    "test": "deno test --frozen --allow-read --allow-write --allow-env --allow-run --allow-net tests",
+    "check": "deno fmt --check && deno lint && deno check src/main.ts src/mod.ts && deno task test && deno task compile",
+    "compile": "deno run --frozen --allow-read --allow-write --allow-run tools/compile.ts"
   },
   "imports": {
-    "@std/path": "jsr:@std/path@^1.0.8",
-    "@std/fs": "jsr:@std/fs@^1.0.8",
-    "@std/yaml": "jsr:@std/yaml@^1.0.5",
-    "@std/crypto": "jsr:@std/crypto@^1.0.4",
-    "@std/assert": "jsr:@std/assert@^1.0.10",
-    "@darkhorseprojects/portable-agents": "../portable-agents/sdk/mod.ts"
+    "@std/assert": "jsr:@std/assert@1.0.19",
+    "@std/fs": "jsr:@std/fs@1.0.24",
+    "@std/path": "jsr:@std/path@1.1.6",
+    "@std/yaml": "jsr:@std/yaml@1.2.0",
+    "discord.js": "npm:discord.js@14.27.0"
+  },
+  "fmt": {
+    "lineWidth": 120,
+    "semiColons": true
   }
 }

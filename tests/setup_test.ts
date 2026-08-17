@@ -1,55 +1,37 @@
 import { assertEquals } from "@std/assert";
-import { parseConfig, serializeConfig, type ConnectorConfig } from "../src/config.ts";
+import { type ConnectorConfig, parseConfig, serializeConfig } from "../src/config.ts";
 
-Deno.test("setup: serialize and parse roundtrip", () => {
+Deno.test("configuration serialization preserves explicit policy", () => {
+  const directory = Deno.build.os === "windows" ? "C:\\agents\\zinc" : "/opt/agents/zinc";
   const original: ConnectorConfig = Object.freeze({
     version: 1,
-    discord: Object.freeze({
-      application: "123456789012345678",
-      bot: "234567890123456789",
+    discord: Object.freeze({ application: "123456789012345678", bot: "234567890123456789" }),
+    concurrency: 4,
+    limits: Object.freeze({
+      pendingRequests: 64,
+      pendingPerActor: 4,
+      eventBytes: 1_048_576,
+      outputBytes: 8_388_608,
+      outputMessages: 64,
+      rpcBytes: 8_388_608,
     }),
     policies: Object.freeze({
-      zinc: {
+      zinc: Object.freeze({
         entry: "zinc.md",
-        authority: Object.freeze(["src/store.lua", "src/memory.lua", "src/llamacpp.lua", "src/env.lua"]),
-        directory: "/home/colin/dev/zinc",
-        memoryBytes: 96 * 1024 * 1024,
-        timeoutMs: 30_000,
-      },
-      analyst: {
-        entry: "analyst.md",
-        authority: Object.freeze(["src/store.lua"]),
-        directory: "/home/colin/dev/zinc",
-        memoryBytes: 128 * 1024 * 1024,
-        timeoutMs: 60_000,
-      },
+        register: Object.freeze({
+          host: "host.md",
+          design: "design.md",
+          discord: "/opt/connector/registrations/discord.md",
+        }),
+        authorize: Object.freeze(["src.host", "src.models", "src.store", "discord"]),
+        directory,
+        memory: "96MiB",
+        timeout: "30s",
+      }),
     }),
-    users: Object.freeze({
-      "111": "zinc",
-      "222": "analyst",
-    }),
-    channels: Object.freeze({
-      "333": "zinc",
-    }),
-    guilds: Object.freeze({
-      "444": "zinc",
-    }),
+    users: Object.freeze({ "345678901234567890": "zinc" }),
+    channels: Object.freeze({ "456789012345678901": "zinc" }),
+    guilds: Object.freeze({ "567890123456789012": "zinc" }),
   });
-
-  const yamlStr = serializeConfig(original);
-  const parsed = parseConfig(yamlStr);
-
-  assertEquals(parsed.version, 1);
-  assertEquals(parsed.discord.application, original.discord.application);
-  assertEquals(parsed.discord.bot, original.discord.bot);
-  assertEquals(parsed.policies.zinc.entry, "zinc.md");
-  assertEquals(parsed.policies.zinc.memoryBytes, 96 * 1024 * 1024);
-  assertEquals(parsed.policies.zinc.timeoutMs, 30_000);
-  assertEquals(parsed.policies.analyst.entry, "analyst.md");
-  assertEquals(parsed.policies.analyst.memoryBytes, 128 * 1024 * 1024);
-  assertEquals(parsed.policies.analyst.timeoutMs, 60_000);
-  assertEquals(parsed.users["111"], "zinc");
-  assertEquals(parsed.users["222"], "analyst");
-  assertEquals(parsed.channels["333"], "zinc");
-  assertEquals(parsed.guilds["444"], "zinc");
+  assertEquals(parseConfig(serializeConfig(original)), original);
 });

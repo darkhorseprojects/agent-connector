@@ -1,0 +1,13 @@
+[Unit]
+Description=Agent Connector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/absolute/path/agc run /absolute/path/to/agent
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
