@@ -55,7 +55,7 @@ export class DiscordConnector {
     this.#signal.throwIfAborted();
     this.#rpc = new DiscordRpcServer(
       this.#client.rest as unknown as DiscordRest,
-      this.#config.limits.rpcBytes,
+      this.#config.limits.frameBytes,
     );
   }
 
@@ -116,7 +116,6 @@ export class DiscordConnector {
           });
           try {
             const renderer = new DiscordRenderer(target as RenderTarget, {
-              outputBytes: this.#config.limits.outputBytes,
               outputMessages: this.#config.limits.outputMessages,
             });
             try {
@@ -125,7 +124,7 @@ export class DiscordConnector {
                   policy,
                   request.actor,
                   request.input,
-                  this.#config.limits.eventBytes,
+                  this.#config.limits.frameBytes,
                   signal,
                   capability.environment,
                 )

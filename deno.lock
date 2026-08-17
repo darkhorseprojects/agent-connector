@@ -8,6 +8,7 @@
     "jsr:@std/path@1.1.6": "1.1.6",
     "jsr:@std/path@^1.1.5": "1.1.6",
     "jsr:@std/yaml@1.2.0": "1.2.0",
+    "npm:@sapphire/shapeshift@4.0.0": "4.0.0",
     "npm:discord.js@14.27.0": "14.27.0"
   },
   "jsr": {
@@ -179,6 +180,7 @@
       "jsr:@std/fs@1.0.24",
       "jsr:@std/path@1.1.6",
       "jsr:@std/yaml@1.2.0",
+      "npm:@sapphire/shapeshift@4.0.0",
       "npm:discord.js@14.27.0"
     ],
     "links": {

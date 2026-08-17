@@ -131,7 +131,8 @@ Deno.test("Discord RPC bounds request and response bodies", async () => {
 });
 
 Deno.test("Discord RPC validates routes and explicit revocation", async () => {
-  const server = new DiscordRpcServer(rest([]), 8_388_608);
+  const calls: Call[] = [];
+  const server = new DiscordRpcServer(rest(calls), 8_388_608);
   const capability = server.grant({
     actor: "a",
     policy: "p",
@@ -145,12 +146,32 @@ Deno.test("Discord RPC validates routes and explicit revocation", async () => {
     "content-type": "application/json",
   };
   try {
-    const invalid = await fetch(`${url}/v1/request`, {
+    for (
+      const route of [
+        "https://discord.com/api",
+        "/../channels",
+        "/%2e%2e/channels",
+        "/%2Fchannels",
+        "/%5Cchannels",
+        "//other-origin",
+        "/channels?x=1",
+        "/channels#fragment",
+      ]
+    ) {
+      const invalid = await fetch(`${url}/v1/request`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ method: "GET", route }),
+      });
+      assertEquals(invalid.status, 400);
+    }
+    const valid = await fetch(`${url}/v1/request`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ method: "GET", route: "https://discord.com/api" }),
+      body: JSON.stringify({ method: "GET", route: "/channels/123/messages" }),
     });
-    assertEquals(invalid.status, 400);
+    assertEquals(valid.status, 200);
+    assertEquals(calls[0].route, "/channels/123/messages");
     capability.revoke();
     assertEquals((await fetch(`${url}/v1/context`, { headers })).status, 401);
   } finally {

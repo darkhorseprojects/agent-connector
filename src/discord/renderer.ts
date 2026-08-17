@@ -25,26 +25,20 @@ type Block = {
 
 export class DiscordRenderer {
   readonly #target: RenderTarget;
-  readonly #maximumOutputBytes: number;
   readonly #maximumOutputMessages: number;
-  readonly #encoder = new TextEncoder();
   readonly #blocks: Block[] = [];
-  #acceptedBytes = 0;
   #sentMessages = 0;
   #current: Block | undefined;
+  #last: Block | undefined;
   #store: Extract<AgentEvent, { type: "store" }> | undefined;
   #pending: Promise<void> = Promise.resolve();
   #finished: Promise<void> | undefined;
 
-  constructor(target: RenderTarget, limits: Readonly<{ outputBytes: number; outputMessages: number }>) {
-    if (!Number.isSafeInteger(limits.outputBytes) || limits.outputBytes <= 0) {
-      throw new RangeError("outputBytes must be positive");
-    }
+  constructor(target: RenderTarget, limits: Readonly<{ outputMessages: number }>) {
     if (!Number.isSafeInteger(limits.outputMessages) || limits.outputMessages <= 0) {
       throw new RangeError("outputMessages must be positive");
     }
     this.#target = target;
-    this.#maximumOutputBytes = limits.outputBytes;
     this.#maximumOutputMessages = limits.outputMessages;
   }
 
@@ -61,7 +55,6 @@ export class DiscordRenderer {
       return;
     }
     if (event.type === "reasoning" || event.type === "response") {
-      this.#accept(event.text);
       if (this.#current?.kind !== event.type) {
         await this.#flushCurrent();
         this.#current = this.#block(event.type);
@@ -72,6 +65,7 @@ export class DiscordRenderer {
     }
     if (event.type === "reasoning_complete" || event.type === "response_complete") {
       await this.#flushCurrent();
+      this.#last = this.#current;
       this.#current = undefined;
       return;
     }
@@ -80,11 +74,12 @@ export class DiscordRenderer {
     this.#current = undefined;
     const language = event.type === "tool_call" ? "lua" : "text";
     const raw = event.type === "tool_call" ? event.code : event.text;
-    this.#accept(raw);
     const value = raw.replaceAll("```", "``\u200b`");
     const block = this.#block("fixed");
     block.stream.append(`\`\`\`${language}\n${value}\n\`\`\``);
+    this.#checkMessages();
     await this.#render(block, true);
+    this.#last = block;
   }
 
   get terminal(): boolean {
@@ -98,7 +93,7 @@ export class DiscordRenderer {
   async #complete(): Promise<void> {
     if (!this.#store) throw new Error("renderer received no terminal Store event");
     const footer = this.#footer(this.#store);
-    const response = [...this.#blocks].reverse().find((block) => block.kind === "response" && block.messages.length);
+    const response = this.#last?.kind === "response" && this.#last.messages.length ? this.#last : undefined;
     if (response) {
       const index = response.messages.length - 1;
       const content = `${response.contents[index]}\n${footer}`;
@@ -128,6 +123,7 @@ export class DiscordRenderer {
   #append(block: Block, value: string): void {
     if (block.kind !== "reasoning") {
       block.stream.append(value);
+      this.#checkMessages();
       return;
     }
     let rendered = "";
@@ -141,6 +137,7 @@ export class DiscordRenderer {
       if (character === "\n") block.quoteAtLineStart = true;
     }
     block.stream.append(rendered);
+    this.#checkMessages();
   }
 
   async #flushCurrent(): Promise<void> {
@@ -148,6 +145,7 @@ export class DiscordRenderer {
     if (this.#current.kind === "reasoning" && this.#current.quoted && this.#current.quoteAtLineStart) {
       this.#current.stream.append(">");
       this.#current.quoteAtLineStart = false;
+      this.#checkMessages();
     }
     await this.#render(this.#current, true);
   }
@@ -165,10 +163,10 @@ export class DiscordRenderer {
     block.lastMutation = now;
   }
 
-  #accept(value: string): void {
-    this.#acceptedBytes += this.#encoder.encode(value).length;
-    if (this.#acceptedBytes > this.#maximumOutputBytes) {
-      throw new Error("agent output exceeds configured byte limit");
+  #checkMessages(): void {
+    const projected = this.#blocks.reduce((total, block) => total + block.stream.messageCount, 0);
+    if (projected > this.#maximumOutputMessages) {
+      throw new Error("agent output exceeds configured message limit");
     }
   }
 

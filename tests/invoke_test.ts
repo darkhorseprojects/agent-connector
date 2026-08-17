@@ -121,7 +121,7 @@ Deno.test("agent parser requires an exact terminal Store event", async () => {
 Deno.test("agent parser enforces event sequencing", async () => {
   for (
     const [value, message] of [
-      ['{"type":"store","result":1,"start":1}\n', "no completed response"],
+      ['{"type":"store","result":1,"start":1}\n', "no completed durable item"],
       [
         '{"type":"reasoning","text":"x"}\n' +
         '{"type":"response_complete","result":1}\n',
@@ -139,7 +139,7 @@ Deno.test("agent parser enforces event sequencing", async () => {
         '{"type":"response_complete","result":1}\n' +
         '{"type":"tool_call","code":"return 1","result":2}\n' +
         '{"type":"store","result":1,"start":1}\n',
-        "before tool_result",
+        "latest completed item",
       ],
       [
         '{"type":"response","text":"x"}\n' +
@@ -151,11 +151,24 @@ Deno.test("agent parser enforces event sequencing", async () => {
         '{"type":"response","text":"x"}\n' +
         '{"type":"response_complete","result":2}\n' +
         '{"type":"store","result":3,"start":1}\n',
-        "does not match the final response",
+        "does not match the latest completed item",
       ],
     ] as const
   ) {
     await assertRejects(() => collect(parseAgentOutput(chunks(encoder.encode(value)))), Error, message);
+  }
+});
+
+Deno.test("Store may terminate after any latest completed durable item", async () => {
+  for (
+    const value of [
+      '{"type":"reasoning","text":"think"}\n{"type":"reasoning_complete","result":2}\n{"type":"store","result":2,"start":1}\n',
+      '{"type":"tool_call","code":"return 1","result":2}\n{"type":"store","result":2,"start":1}\n',
+      '{"type":"tool_call","code":"return 1","result":2}\n{"type":"tool_result","text":"1","ok":true,"result":3}\n{"type":"store","result":3,"start":1}\n',
+    ]
+  ) {
+    const events = await collect(parseAgentOutput(chunks(encoder.encode(value))));
+    assertEquals(events.at(-1)?.type, "store");
   }
 });
 
@@ -174,8 +187,8 @@ Deno.test("agent parser accepts gaps in nested durable identifiers", async () =>
 Deno.test("agent parser rejects malformed events and transport", async () => {
   for (
     const [value, message] of [
-      ['{"type":"response","text":"x","extra":1}\n', "unknown response event key"],
-      ['{"type":"store","result":1,"start":2}\n', "precedes store.start"],
+      ['{"type":"response","text":"x","extra":1}\n', "Received one or more errors"],
+      ['{"type":"store","result":1,"start":2}\n', "no completed durable item"],
       ['{"type":"unknown"}\n', "unknown agent event type"],
       ["\n", "empty event line"],
     ] as const

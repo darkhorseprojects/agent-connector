@@ -11,9 +11,6 @@ export class DiscordMessageStream {
 
   append(text: string): void {
     this.#tail += text;
-  }
-
-  snapshot(): string[] {
     while (this.#tail.trim().length) {
       const part = takeChunk(this.#tail, this.#maximum, this.#openFence);
       if (part.remaining === undefined) break;
@@ -21,7 +18,13 @@ export class DiscordMessageStream {
       this.#tail = part.remaining;
       this.#openFence = part.open;
     }
+  }
 
+  get messageCount(): number {
+    return this.#finalized.length + (this.#tail.trim().length ? 1 : 0);
+  }
+
+  snapshot(): string[] {
     const tail = this.#tail.trim();
     if (!tail) return [...this.#finalized];
     return [...this.#finalized, renderChunk(tail, this.#maximum, this.#openFence).content];
@@ -49,7 +52,7 @@ type TakenChunk = Readonly<{ content: string; open: string | null; remaining?: s
 function takeChunk(text: string, maximum: number, openFence: string | null): TakenChunk {
   const remaining = text.trimStart();
   const prefix = openFence ? `${openFence}\n` : "";
-  const available = maximum - prefix.length - 4;
+  const available = maximum - prefix.length - (openFence ? 4 : 0);
   let split = Math.min(remaining.trimEnd().length, available);
   if (split < remaining.trimEnd().length) {
     const boundary = Math.max(
@@ -62,7 +65,12 @@ function takeChunk(text: string, maximum: number, openFence: string | null): Tak
   if (split > 0 && isLowSurrogate(remaining.charCodeAt(split))) split--;
   if (split <= 0) throw new Error("could not split Discord message");
 
-  const piece = remaining.slice(0, split).trim();
+  let piece = remaining.slice(0, split).trim();
+  if (fenceState(piece, openFence) && prefix.length + piece.length + 4 > maximum) {
+    split -= 4;
+    if (split <= 0 || isLowSurrogate(remaining.charCodeAt(split))) split--;
+    piece = remaining.slice(0, split).trim();
+  }
   const rendered = renderChunk(piece, maximum, openFence);
   const tail = remaining.slice(split).trimStart();
   return {

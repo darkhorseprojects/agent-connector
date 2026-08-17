@@ -2,7 +2,7 @@ import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { DiscordRenderer, type RenderedMessage, type RenderTarget } from "../src/discord/renderer.ts";
 
 type Options = { content: string; allowedMentions: { parse: never[] } };
-const limits = Object.freeze({ outputBytes: 1_048_576, outputMessages: 64 });
+const limits = Object.freeze({ outputMessages: 64 });
 
 class Message implements RenderedMessage {
   content: string;
@@ -75,6 +75,19 @@ Deno.test("renderer escapes nested fences and can send Store alone", async () =>
   assertEquals(target.messages[1].content, "-# result #1 · start #1");
 });
 
+Deno.test("non-response Store footer follows the latest completed item", async () => {
+  const target = new Target();
+  const renderer = new DiscordRenderer(target, limits);
+  await renderer.push({ type: "response", text: "earlier" });
+  await renderer.push({ type: "response_complete", result: 2 });
+  await renderer.push({ type: "tool_call", code: "return 1", result: 3 });
+  await renderer.push({ type: "store", result: 3, start: 1 });
+  await renderer.finish();
+  assertEquals(target.messages[0].content, "earlier");
+  assertEquals(target.messages[1].content, "```lua\nreturn 1\n```");
+  assertEquals(target.messages[2].content, "-# result #3 · start #1");
+});
+
 Deno.test("renderer requires Store and rejects output after it", async () => {
   const renderer = new DiscordRenderer(new Target(), limits);
   await renderer.push({ type: "response", text: "partial" });
@@ -137,23 +150,9 @@ Deno.test("renderer serializes slow Discord mutations", async () => {
   assertEquals(maximumActive, 1);
 });
 
-Deno.test("renderer enforces cumulative UTF-8 output bytes", async () => {
-  const exact = new DiscordRenderer(new Target(), { outputBytes: 4, outputMessages: 2 });
-  await exact.push({ type: "response", text: "😀" });
-  await exact.push({ type: "store", result: 1, start: 1 });
-  await exact.finish();
-
-  const exceeded = new DiscordRenderer(new Target(), { outputBytes: 3, outputMessages: 2 });
-  await assertRejects(
-    () => exceeded.push({ type: "response", text: "😀" }),
-    Error,
-    "exceeds configured byte limit",
-  );
-});
-
 Deno.test("renderer enforces the sent-message count", async () => {
   const target = new Target();
-  const renderer = new DiscordRenderer(target, { outputBytes: 100, outputMessages: 1 });
+  const renderer = new DiscordRenderer(target, { outputMessages: 1 });
   await renderer.push({ type: "tool_call", code: "return 1", result: 1 });
   await assertRejects(
     () => renderer.push({ type: "tool_result", text: "1", ok: true, result: 2 }),

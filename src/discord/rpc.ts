@@ -1,3 +1,5 @@
+import { s } from "@sapphire/shapeshift";
+
 export type DiscordContext = Readonly<{
   actor: string;
   policy: string;
@@ -114,19 +116,20 @@ export class DiscordRpcServer {
   }
 
   async #request(value: unknown): Promise<unknown> {
-    const request = object(value, "request");
-    exact(request, ["method", "route", "query", "body", "reason", "files"]);
-    const method = text(request.method, "method").toUpperCase();
-    if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new RequestError("unsupported method");
-    const route = text(request.route, "route");
-    if (!route.startsWith("/") || route.startsWith("//") || route.includes("://")) {
-      throw new RequestError("route must be a Discord REST path");
+    let request: ReturnType<typeof requestSchema.parse>;
+    try {
+      request = requestSchema.parse(value);
+    } catch {
+      throw new RequestError("request structure is invalid");
     }
+    const method = request.method.toUpperCase();
+    if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new RequestError("unsupported method");
+    const route = normalizeRoute(request.route);
     const options: { body?: unknown; query?: URLSearchParams; reason?: string; files?: RestOptions["files"] } = {};
     if (request.body !== undefined) options.body = request.body;
     if (request.query !== undefined) options.query = query(request.query);
     if (request.reason !== undefined) {
-      const reason = text(request.reason, "reason");
+      const reason = request.reason;
       if (reason.length > 512 || /[\r\n]/.test(reason)) throw new RequestError("reason is invalid");
       options.reason = reason;
     }
@@ -153,29 +156,63 @@ function response(status: number, value: unknown, maximumBytes: number): Respons
   return new Response(body, { status, headers: { "content-type": "application/json" } });
 }
 
-function object(value: unknown, name: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new RequestError(`${name} must be an object`);
+const requestText = s.string().lengthGreaterThan(0).regex(/^[^\0]+$/);
+const requestSchema = s.object({
+  method: requestText,
+  route: requestText,
+  query: s.unknown().optional(),
+  body: s.unknown().optional(),
+  reason: requestText.optional(),
+  files: s.unknown().optional(),
+}).strict();
+const querySchema = s.record(s.unknown());
+const fileSchema = s.object({
+  name: requestText,
+  data: requestText,
+  contentType: requestText.optional(),
+}).strict();
+
+function normalizeRoute(route: string): string {
+  if (
+    !route.startsWith("/") || route.includes("?") || route.includes("#") || route.includes("\\") ||
+    hasControl(route)
+  ) {
+    throw new RequestError("route must be a Discord REST path");
   }
-  return value as Record<string, unknown>;
+  for (const part of route.slice(1).split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(part);
+    } catch {
+      throw new RequestError("route contains invalid encoding");
+    }
+    if (
+      decoded === "." || decoded === ".." || decoded.includes("\\") || decoded.includes("/") ||
+      decoded.includes("?") || decoded.includes("#") || hasControl(decoded)
+    ) {
+      throw new RequestError("route escapes the Discord REST path");
+    }
+  }
+  const value = new URL(route.slice(1), "https://discord.com/api/v10/");
+  if (value.origin !== "https://discord.com" || !value.pathname.startsWith("/api/v10/")) {
+    throw new RequestError("route escapes the Discord REST path");
+  }
+  return value.pathname.slice("/api/v10".length);
 }
 
-function exact(value: Record<string, unknown>, allowed: readonly string[]): void {
-  for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) throw new RequestError(`unknown request key: ${key}`);
-  }
-}
-
-function text(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value || value.includes("\0")) {
-    throw new RequestError(`${name} must be nonempty text without NUL`);
-  }
-  return value;
+function hasControl(value: string): boolean {
+  return [...value].some((character) => character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127);
 }
 
 function query(value: unknown): URLSearchParams {
+  let values: Record<string, unknown>;
+  try {
+    values = querySchema.parse(value);
+  } catch {
+    throw new RequestError("query must be an object");
+  }
   const result = new URLSearchParams();
-  for (const [name, item] of Object.entries(object(value, "query"))) {
+  for (const [name, item] of Object.entries(values)) {
     for (const part of Array.isArray(item) ? item : [item]) result.append(name, scalar(part, `query.${name}`));
   }
   return result;
@@ -189,19 +226,19 @@ function scalar(value: unknown, name: string): string {
 function files(value: unknown): RestOptions["files"] {
   if (!Array.isArray(value)) throw new RequestError("files must be an array");
   return value.map((item, index) => {
-    const file = object(item, `files[${index}]`);
-    exact(file, ["name", "data", "contentType"]);
+    let file: ReturnType<typeof fileSchema.parse>;
+    try {
+      file = fileSchema.parse(item);
+    } catch {
+      throw new RequestError(`files[${index}] is invalid`);
+    }
     let data: Uint8Array;
     try {
-      data = Uint8Array.fromBase64(text(file.data, `files[${index}].data`));
+      data = Uint8Array.fromBase64(file.data);
     } catch {
       throw new RequestError(`files[${index}].data is not base64`);
     }
-    return {
-      data,
-      name: text(file.name, `files[${index}].name`),
-      contentType: file.contentType === undefined ? undefined : text(file.contentType, `files[${index}].contentType`),
-    };
+    return { data, name: file.name, contentType: file.contentType };
   });
 }
 

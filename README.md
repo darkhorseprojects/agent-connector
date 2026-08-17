@@ -36,10 +36,8 @@ concurrency: 4
 limits:
   pending_requests: 64
   pending_per_actor: 4
-  event_bytes: 1048576
-  output_bytes: 8388608
+  frame_bytes: 8388608
   output_messages: 64
-  rpc_bytes: 8388608
 
 policies:
   zinc:
@@ -106,23 +104,24 @@ actor scheduler slot is released.
 
 ## Delivery
 
-Agents emit strict NDJSON. Connector rejects mismatched stream completions, incomplete tool pairs, non-increasing
-durable IDs, and a Store result that is not the final completed response. It renders reasoning as blockquotes, tool
-calls as Lua fences, tool results as text fences, and response deltas as Markdown. Mutations are serialized and
-provisional model deltas are coalesced to at most one Discord update per 400 ms per active block; completion and
-semantic boundaries flush immediately.
+Agents emit strict NDJSON. Connector rejects mismatched stream completions, invalid continued tool sequences,
+non-increasing durable IDs, and a Store result that is not the latest completed durable item. It renders reasoning as
+blockquotes, tool calls as Lua fences, tool results as text fences, and response deltas as Markdown. Mutations are
+serialized and provisional model deltas are coalesced to at most one Discord update per 400 ms per active block;
+completion and semantic boundaries flush immediately.
 
-Every Discord send disables mentions and obeys Discord's 2,000-character message constraint. Connector enforces the
-configured raw event-line bytes, cumulative renderable output bytes, sent-message count, and RPC request/response bytes.
-Exceeding one of these limits stops the invocation, revokes its Discord capability, and reports a local incident.
-Already delivered provisional output remains visible.
+Every Discord send disables mentions and obeys Discord's 2,000-character message constraint. Connector enforces one
+configured frame limit for raw event lines and RPC requests/responses, plus the sent-message count. Exceeding one of
+these limits stops the invocation, revokes its Discord capability, and reports a local incident. Already delivered
+provisional output remains visible.
 
 Reasoning and response text streams provisionally. `reasoning_complete` and `response_complete` identify the durable
 record committed for each finished item; completed tool calls and results carry their record IDs directly. Connector
 validates but does not render these completion IDs separately.
 
-The terminal event is exactly `{ "type": "store", "result": N, "start": M }`, where `result` is the final durable
-response and `start` is the request record. Failed executions emit no synthetic Store event or partial status.
+The terminal event is exactly `{ "type": "store", "result": N, "start": M }`, where `result` is the latest completed
+durable item and `start` is the request record. The agent owns continuation policy; Connector accepts Store after
+reasoning, a response, a tool call, or a tool result. Failed executions emit no synthetic Store event or partial status.
 Previously streamed provisional output is not retracted.
 
 Messages for one actor remain FIFO through thread creation, execution, rendering, Store footer, incident delivery, and

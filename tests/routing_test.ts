@@ -11,10 +11,8 @@ concurrency: 2
 limits:
   pending_requests: 64
   pending_per_actor: 4
-  event_bytes: 1048576
-  output_bytes: 8388608
+  frame_bytes: 8388608
   output_messages: 64
-  rpc_bytes: 8388608
 policies:
   zinc:
     entry: zinc.md

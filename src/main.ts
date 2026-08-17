@@ -39,6 +39,7 @@ async function run(args: string[]): Promise<void> {
   if (args.length > 1) throw new Error("usage: agc run [DIRECTORY]");
   const directory = await resolveDirectory(args[0]);
   const config = await loadConfig(directory);
+  for (const policy of Object.values(config.policies)) await checkAgent(policy);
   const token = await loadToken(directory);
   const controller = new AbortController();
   const stop = () => controller.abort(new Error("Agent Connector interrupted."));
@@ -62,8 +63,6 @@ async function run(args: string[]): Promise<void> {
   }
 }
 
-const commands: Readonly<Record<string, (args: string[]) => Promise<void>>> = Object.freeze({ connect, check, run });
-
 async function main(): Promise<void> {
   const [command, ...args] = Deno.args;
   if (!command || command === "help" || command === "--help" || command === "-h") {
@@ -79,9 +78,19 @@ Usage:
     console.log(manifest.version);
     return;
   }
-  const action = commands[command];
-  if (!action) throw new Error(`unknown command: ${command}`);
-  await action(args);
+  switch (command) {
+    case "connect":
+      await connect(args);
+      return;
+    case "check":
+      await check(args);
+      return;
+    case "run":
+      await run(args);
+      return;
+    default:
+      throw new Error(`unknown command: ${command}`);
+  }
 }
 
 if (import.meta.main) {

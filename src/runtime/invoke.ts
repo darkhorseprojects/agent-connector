@@ -1,3 +1,4 @@
+import { s } from "@sapphire/shapeshift";
 import { Agent } from "@darkhorseprojects/portable-agents";
 import type { Policy } from "../config.ts";
 
@@ -18,7 +19,7 @@ function agent(policy: Policy): Agent {
 }
 
 export async function checkAgent(policy: Policy, signal?: AbortSignal): Promise<void> {
-  await agent(policy).check(signal);
+  await agent(policy).check({ memory: policy.memory, timeout: policy.timeout, signal });
 }
 
 export function runAgent(
@@ -53,10 +54,7 @@ export async function* parseAgentOutput(
   let parts: Uint8Array[] = [];
   let lineBytes = 0;
   let terminal = false;
-  const protocol: ProtocolState = {
-    awaitingToolResult: false,
-    lastResult: 0,
-  };
+  const protocol: ProtocolState = { awaitingToolResult: false };
   try {
     for await (const chunk of output) {
       if (!(chunk instanceof Uint8Array)) throw new TypeError("agent output chunk is not bytes");
@@ -95,12 +93,13 @@ export async function* parseAgentOutput(
 }
 
 type StreamKind = "reasoning" | "response";
+type DurableKind = StreamKind | "tool_call" | "tool_result";
+type DurableItem = Readonly<{ kind: DurableKind; id: number }>;
 
 type ProtocolState = {
   open?: StreamKind;
   awaitingToolResult: boolean;
-  lastResult: number;
-  finalResponse?: number;
+  last?: DurableItem;
 };
 
 function sequence(state: ProtocolState, event: AgentEvent): void {
@@ -116,36 +115,35 @@ function sequence(state: ProtocolState, event: AgentEvent): void {
   if (event.type === "reasoning_complete" || event.type === "response_complete") {
     const kind = event.type === "reasoning_complete" ? "reasoning" : "response";
     if (state.open !== kind) throw new Error(`${event.type} has no matching ${kind} stream`);
-    result(state, event.result);
+    result(state, event.result, kind);
     state.open = undefined;
-    if (kind === "response") state.finalResponse = event.result;
     return;
   }
 
   if (event.type === "tool_call") {
     if (state.open !== undefined) throw new Error(`tool_call occurs before ${state.open}_complete`);
     if (state.awaitingToolResult) throw new Error("tool_call occurs before tool_result");
-    result(state, event.result);
+    result(state, event.result, "tool_call");
     state.awaitingToolResult = true;
     return;
   }
 
   if (event.type === "tool_result") {
     if (!state.awaitingToolResult) throw new Error("tool_result has no matching tool_call");
-    result(state, event.result);
+    result(state, event.result, "tool_result");
     state.awaitingToolResult = false;
     return;
   }
 
   if (state.open !== undefined) throw new Error(`Store occurs before ${state.open}_complete`);
-  if (state.awaitingToolResult) throw new Error("Store occurs before tool_result");
-  if (state.finalResponse === undefined) throw new Error("Store has no completed response");
-  if (event.result !== state.finalResponse) throw new Error("Store result does not match the final response");
+  if (!state.last) throw new Error("Store has no completed durable item");
+  if (event.result !== state.last.id) throw new Error("Store result does not match the latest completed item");
+  if (event.start > event.result) throw new Error("Store result precedes Store start");
 }
 
-function result(state: ProtocolState, value: number): void {
-  if (value <= state.lastResult) throw new Error("agent result identifiers must increase");
-  state.lastResult = value;
+function result(state: ProtocolState, id: number, kind: DurableKind): void {
+  if (state.last && id <= state.last.id) throw new Error("agent result identifiers must increase");
+  state.last = Object.freeze({ kind, id });
 }
 
 function concatenate(parts: readonly Uint8Array[], length: number): Uint8Array {
@@ -159,6 +157,23 @@ function concatenate(parts: readonly Uint8Array[], length: number): Uint8Array {
   return result;
 }
 
+const eventText = s.string().lengthGreaterThan(0).regex(/^[^\0]+$/);
+const resultId = s.number().safeInt().greaterThan(0);
+const eventSchemas = {
+  reasoning: s.object({ type: s.literal("reasoning"), text: eventText }).strict(),
+  reasoning_complete: s.object({ type: s.literal("reasoning_complete"), result: resultId }).strict(),
+  response: s.object({ type: s.literal("response"), text: eventText }).strict(),
+  response_complete: s.object({ type: s.literal("response_complete"), result: resultId }).strict(),
+  tool_call: s.object({ type: s.literal("tool_call"), code: eventText, result: resultId }).strict(),
+  tool_result: s.object({
+    type: s.literal("tool_result"),
+    text: s.string().regex(/^[^\0]*$/),
+    ok: s.boolean(),
+    result: resultId,
+  }).strict(),
+  store: s.object({ type: s.literal("store"), result: resultId, start: resultId }).strict(),
+} as const;
+
 function parseEvent(line: string): AgentEvent {
   let value: unknown;
   try {
@@ -166,67 +181,12 @@ function parseEvent(line: string): AgentEvent {
   } catch (error) {
     throw new Error("agent event is not valid JSON", { cause: error });
   }
-  const event = object(value, "agent event");
-  if (event.type === "reasoning" || event.type === "response") {
-    exact(event, ["type", "text"]);
-    return Object.freeze({ type: event.type, text: text(event.text, `${event.type}.text`, false) });
+  const type = value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as { type?: unknown }).type
+    : undefined;
+  if (typeof type !== "string" || !Object.hasOwn(eventSchemas, type)) {
+    throw new TypeError(`unknown agent event type: ${String(type)}`);
   }
-  if (event.type === "reasoning_complete" || event.type === "response_complete") {
-    exact(event, ["type", "result"]);
-    return Object.freeze({ type: event.type, result: identifier(event.result, `${event.type}.result`) });
-  }
-  if (event.type === "tool_call") {
-    exact(event, ["type", "code", "result"]);
-    return Object.freeze({
-      type: "tool_call",
-      code: text(event.code, "tool_call.code", false),
-      result: identifier(event.result, "tool_call.result"),
-    });
-  }
-  if (event.type === "tool_result") {
-    exact(event, ["type", "text", "ok", "result"]);
-    if (typeof event.ok !== "boolean") throw new TypeError("tool_result.ok must be boolean");
-    return Object.freeze({
-      type: "tool_result",
-      text: text(event.text, "tool_result.text", true),
-      ok: event.ok,
-      result: identifier(event.result, "tool_result.result"),
-    });
-  }
-  if (event.type === "store") {
-    exact(event, ["type", "result", "start"]);
-    const result = identifier(event.result, "store.result");
-    const start = identifier(event.start, "store.start");
-    if (result < start) throw new TypeError("store.result precedes store.start");
-    return Object.freeze({ type: "store", result, start });
-  }
-  throw new TypeError(`unknown agent event type: ${String(event.type)}`);
-}
-
-function object(value: unknown, name: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function exact(value: Record<string, unknown>, allowed: readonly string[]): void {
-  for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) throw new TypeError(`unknown ${String(value.type)} event key: ${key}`);
-  }
-  for (const key of allowed) {
-    if (!Object.hasOwn(value, key)) throw new TypeError(`${String(value.type)} event is missing ${key}`);
-  }
-}
-
-function text(value: unknown, name: string, empty: boolean): string {
-  if (typeof value !== "string" || (!empty && !value) || value.includes("\0")) {
-    throw new TypeError(`${name} is invalid`);
-  }
-  return value;
-}
-
-function identifier(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new TypeError(`${name} must be a positive integer`);
-  return value as number;
+  const schema = eventSchemas[type as keyof typeof eventSchemas] as { parse(value: unknown): unknown };
+  return Object.freeze(schema.parse(value) as AgentEvent);
 }

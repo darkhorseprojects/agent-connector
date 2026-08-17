@@ -94,10 +94,8 @@ export async function setupNewConfig(directory: string): Promise<void> {
     limits: Object.freeze({
       pendingRequests: 64,
       pendingPerActor: 4,
-      eventBytes: 1_048_576,
-      outputBytes: 8_388_608,
+      frameBytes: 8_388_608,
       outputMessages: 64,
-      rpcBytes: 8_388_608,
     }),
     policies: Object.freeze({ [policyName]: policy }),
     users: Object.freeze(users),
