@@ -16,14 +16,14 @@ Deno.test("configuration serialization preserves explicit policy", () => {
     policies: Object.freeze({
       zinc: Object.freeze({
         entry: "zinc.md",
-        register: Object.freeze({
-          host: "host.md",
-          design: "design.md",
-          discord: "/opt/connector/registrations/discord.md",
-        }),
-        authorize: Object.freeze(["src.host", "src.models", "src.store", "discord"]),
+        mounts: Object.freeze([
+          Object.freeze({ moduleName: "host", sourcePath: "host.md" }),
+          Object.freeze({ moduleName: "design", sourcePath: "design.md" }),
+          Object.freeze({ moduleName: "discord", sourcePath: "/opt/connector/registrations/discord.md" }),
+        ]),
+        trustedModules: Object.freeze(["src.host", "src.models", "src.store", "discord"]),
         directory,
-        memory: "96MiB",
+        luaMemory: "96MiB",
         timeout: "30s",
       }),
     }),

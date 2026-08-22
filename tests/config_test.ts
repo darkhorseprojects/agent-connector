@@ -18,13 +18,13 @@ limits:
 policies:
   zinc:
     entry: zinc.md
-    register:
+    mounts:
       host: host.md
       design: design.md
       discord: /opt/agent-connector/registrations/discord.md
-    authorize: [src.host, src.models, src.store, discord]
+    trusted_modules: [src.host, src.models, src.store, discord]
     directory: ${JSON.stringify(directory)}
-    memory: 96MiB
+    lua_memory: 96MiB
     timeout: 30s
 users:
   "345678901234567890": zinc
@@ -45,10 +45,10 @@ Deno.test("config parses exact explicit v1 data", () => {
     outputMessages: 64,
   });
   assertEquals(config.policies.zinc.directory, directory);
-  assertEquals(config.policies.zinc.memory, "96MiB");
+  assertEquals(config.policies.zinc.luaMemory, "96MiB");
   assertEquals(config.policies.zinc.timeout, "30s");
-  assertEquals(config.policies.zinc.register.host, "host.md");
-  assertEquals(config.policies.zinc.authorize, ["src.host", "src.models", "src.store", "discord"]);
+  assertEquals(config.policies.zinc.mounts[0].sourcePath, "host.md");
+  assertEquals(config.policies.zinc.trustedModules, ["src.host", "src.models", "src.store", "discord"]);
 });
 
 Deno.test("config rejects unknown, implicit, and unsafe values", () => {
@@ -75,5 +75,5 @@ Deno.test("config rejects unknown, implicit, and unsafe values", () => {
     TypeError,
     "absolute",
   );
-  assertThrows(() => parseConfig(source().replace("    memory: 96MiB\n", "")), Error);
+  assertThrows(() => parseConfig(source().replace("    lua_memory: 96MiB\n", "")), Error);
 });

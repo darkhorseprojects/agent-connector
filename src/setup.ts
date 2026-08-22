@@ -33,14 +33,17 @@ function names(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-function registrations(value: string): Readonly<Record<string, string>> {
-  const result: Record<string, string> = Object.create(null);
-  for (const item of names(value)) {
-    const separator = item.indexOf("=");
-    if (separator <= 0 || separator === item.length - 1) throw new Error(`invalid registration: ${item}`);
-    result[item.slice(0, separator).trim()] = item.slice(separator + 1).trim();
-  }
-  return Object.freeze(result);
+function mounts(value: string): Policy["mounts"] {
+  return Object.freeze(
+    names(value).map((item) => {
+      const separator = item.indexOf("=");
+      if (separator <= 0 || separator === item.length - 1) throw new Error(`invalid mount: ${item}`);
+      return Object.freeze({
+        moduleName: item.slice(0, separator).trim(),
+        sourcePath: item.slice(separator + 1).trim(),
+      });
+    }),
+  );
 }
 
 function discordRegistration(): string {
@@ -67,12 +70,10 @@ export async function setupNewConfig(directory: string): Promise<void> {
   const policyName = ask("Policy name", canonical.split(/[\\/]/).pop() || "agent");
   const policy: Policy = Object.freeze({
     entry: ask("Exact package-relative entry"),
-    register: registrations(
-      ask("Registrations (name=path, comma-separated)", `discord=${discordRegistration()}`),
-    ),
-    authorize: Object.freeze(names(ask("Authorized names (comma-separated)", "discord"))),
+    mounts: mounts(ask("Mounts (name=path, comma-separated)", `discord=${discordRegistration()}`)),
+    trustedModules: Object.freeze(names(ask("Trusted modules (comma-separated)", "discord"))),
     directory: canonical,
-    memory: ask("Memory limit", "96MiB"),
+    luaMemory: ask("Lua memory limit", "96MiB"),
     timeout: ask("Timeout duration", "30s"),
   });
   const concurrency = positiveInteger("Maximum concurrent agents", "4");

@@ -2,7 +2,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { fromFileUrl } from "@std/path";
 import { parseConfig } from "../src/config.ts";
 
-Deno.test("Discord is one explicit registered and authorized Markdown source", async () => {
+Deno.test("Discord is one explicit mounted and trusted Markdown source", async () => {
   const discord = fromFileUrl(new URL("../registrations/discord.md", import.meta.url));
   const config = parseConfig(`
 version: 1
@@ -16,17 +16,17 @@ limits:
 policies:
   zinc:
     entry: zinc.md
-    register: { discord: ${JSON.stringify(discord)} }
-    authorize: [discord]
+    mounts: { discord: ${JSON.stringify(discord)} }
+    trusted_modules: [discord]
     directory: /agents/zinc
-    memory: 96MiB
+    lua_memory: 96MiB
     timeout: 30s
 users: {}
 channels: {}
 guilds: {}
 `);
-  assertEquals(config.policies.zinc.register, { discord });
-  assertEquals(config.policies.zinc.authorize, ["discord"]);
+  assertEquals(config.policies.zinc.mounts, [{ moduleName: "discord", sourcePath: discord }]);
+  assertEquals(config.policies.zinc.trustedModules, ["discord"]);
   const source = await Deno.readTextFile(discord);
   assertStringIncludes(source, "## Guide");
   assertStringIncludes(source, "## Program");

@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { Agent } from "@darkhorseprojects/portable-agents";
+import { type Agent, run } from "@darkhorseprojects/portable-agents";
 import { fromFileUrl, join } from "@std/path";
 import { type DiscordRest, DiscordRpcServer } from "../src/discord/rpc.ts";
 
@@ -20,11 +20,12 @@ Deno.test("real worker receives the exact Discord value", async () => {
       channelId: "3",
     });
     const discord = fromFileUrl(new URL("../registrations/discord.md", import.meta.url));
-    const agent = Agent.directory(root, "entry.lua", {
-      executable: Deno.env.get("AGENT_BIN") ?? "agent",
-      register: { discord },
-      authorize: ["discord"],
-    });
+    const agent: Agent = {
+      target: { directory: root },
+      entryPath: "entry.lua",
+      mounts: [{ moduleName: "discord", sourcePath: discord }],
+      trustedModules: ["discord"],
+    };
     let output = "";
     const decoder = new TextDecoder();
     const home = Deno.env.get("HOME")!;
@@ -33,7 +34,14 @@ Deno.test("real worker receives the exact Discord value", async () => {
       LUA_PATH_5_5: `${home}/.local/share/lua/5.5/?.lua;${home}/.local/share/lua/5.5/?/init.lua;;`,
       LUA_CPATH_5_5: `${home}/.local/lib/lua/5.5/?.so;;`,
     };
-    for await (const chunk of agent.run(new Uint8Array(), { environment, memory: "96MiB", timeout: "30s" })) {
+    for await (
+      const chunk of run(agent, new Uint8Array(), {
+        executable: Deno.env.get("AGENT_BIN") ?? "agent",
+        environment,
+        luaMemory: "96MiB",
+        timeout: "30s",
+      })
+    ) {
       output += decoder.decode(chunk, { stream: true });
     }
     output += decoder.decode();

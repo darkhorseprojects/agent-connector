@@ -41,10 +41,10 @@ Deno.test({
       const events = await collect(runAgent(
         {
           entry: "entry.lua",
-          register: {},
-          authorize: [],
+          mounts: [],
+          trustedModules: [],
           directory: root,
-          memory: "96MiB",
+          luaMemory: "96MiB",
           timeout: "30s",
         },
         "actor",

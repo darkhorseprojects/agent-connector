@@ -42,17 +42,17 @@ limits:
 policies:
   zinc:
     entry: zinc.md
-    register:
+    mounts:
       host: host.md
       design: design.md
       discord: /absolute/path/to/agent-connector/registrations/discord.md
-    authorize:
+    trusted_modules:
       - src.host
       - src.models
       - src.store
       - discord
     directory: /absolute/path/to/zinc
-    memory: 96MiB
+    lua_memory: 96MiB
     timeout: 30s
 
 users:
@@ -63,10 +63,10 @@ guilds:
   "567890123456789012": zinc
 ```
 
-Every registration and authorization is visible in policy YAML. Connector does not append Discord values during
-invocation. Relative registration paths resolve in the agent package; external registration paths are absolute. Memory,
-timeout, concurrency, and every limit are required and have no Connector defaults. Workers run with
-`cwd = policy.directory`; they never inherit the directory from which Connector was launched.
+Every mount and trusted module is visible in policy YAML. Connector does not append Discord values during invocation.
+Relative mount paths resolve in the agent package; external mount paths are absolute. Lua memory, timeout, concurrency,
+and every limit are required and have no Connector defaults. Workers run with `cwd = policy.directory`; they never
+inherit the directory from which Connector was launched.
 
 Direct messages route by user. Exact channels precede inherited thread-parent channels. Guild fallback requires a bot
 mention. Bots, webhooks, and empty requests are ignored.
@@ -79,9 +79,9 @@ agc check /absolute/path/to/zinc
 agc run /absolute/path/to/zinc
 ```
 
-For a new configuration, `connect` asks for the exact entry, registrations, authorizations, resource settings, and
-optional routes. It validates Discord identity and runs `agent check` before writing the configuration and privately
-stored token. It does not discover package files or infer Zinc capabilities. With an existing configuration, `connect`
+For a new configuration, `connect` asks for the exact entry, mounts, trusted modules, resource settings, and optional
+routes. It validates Discord identity and runs `agent check` before writing the configuration and privately stored
+token. It does not discover package files or infer Zinc capabilities. With an existing configuration, `connect`
 validates every policy, optionally replaces the token, and prints the invite URL. Edit policy and route YAML directly,
 then run `agc check`.
 
@@ -91,7 +91,7 @@ disconnects Discord, and exits.
 ## Discord registration
 
 [`registrations/discord.md`](registrations/discord.md) is the single Discord source. It contains both the guide and
-authorized implementation and returns one native Lua package value:
+trusted implementation and returns one native Lua package value:
 
 ```lua
 local discord = require("discord")

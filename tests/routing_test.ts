@@ -16,17 +16,17 @@ limits:
 policies:
   zinc:
     entry: zinc.md
-    register: {}
-    authorize: []
+    mounts: {}
+    trusted_modules: []
     directory: /tmp
-    memory: 96MiB
+    lua_memory: 96MiB
     timeout: 30s
   analyst:
     entry: analyst.md
-    register: {}
-    authorize: []
+    mounts: {}
+    trusted_modules: []
     directory: /tmp
-    memory: 96MiB
+    lua_memory: 96MiB
     timeout: 30s
 users:
   "345678901234567890": zinc

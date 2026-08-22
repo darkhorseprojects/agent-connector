@@ -4,10 +4,10 @@ import { parse as parseYaml, stringify as stringifyYaml } from "@std/yaml";
 
 export type Policy = Readonly<{
   entry: string;
-  register: Readonly<Record<string, string>>;
-  authorize: readonly string[];
+  mounts: readonly Readonly<{ moduleName: string; sourcePath: string }>[];
+  trustedModules: readonly string[];
   directory: string;
-  memory: string;
+  luaMemory: string;
   timeout: string;
 }>;
 
@@ -51,10 +51,10 @@ const rootSchema = s.object({
 }).strict();
 const policySchema = s.object({
   entry: text,
-  register: mapping,
-  authorize: text.array(),
+  mounts: mapping,
+  trusted_modules: text.array(),
   directory: text,
-  memory: text,
+  lua_memory: text,
   timeout: text,
 }).strict();
 
@@ -77,21 +77,23 @@ export function parseConfig(source: string): ConnectorConfig {
     if (!isAbsolute(policy.directory)) {
       throw new TypeError(`policy '${name}' directory must be absolute: ${policy.directory}`);
     }
-    const register: Record<string, string> = Object.create(null);
-    for (const [module, path] of Object.entries(policy.register)) {
-      if (!MODULE.test(module)) throw new TypeError(`policy '${name}' registration must be dotted Lua identifiers`);
-      register[module] = sourcePath(path, `policy '${name}' register.${module}`, true);
-    }
-    const authorize = policy.authorize.map((module) => {
-      if (!MODULE.test(module)) throw new TypeError(`policy '${name}' authorization must be dotted Lua identifiers`);
+    const mounts = Object.entries(policy.mounts).map(([moduleName, path]) => {
+      if (!MODULE.test(moduleName)) throw new TypeError(`policy '${name}' mount must be a dotted Lua identifier`);
+      return Object.freeze({
+        moduleName,
+        sourcePath: sourcePath(path, `policy '${name}' mounts.${moduleName}`, true),
+      });
+    });
+    const trustedModules = policy.trusted_modules.map((module) => {
+      if (!MODULE.test(module)) throw new TypeError(`policy '${name}' trust must be a dotted Lua identifier`);
       return module;
     });
     policies[name] = Object.freeze({
       entry: sourcePath(policy.entry, `policy '${name}' entry`, false),
-      register: Object.freeze(register),
-      authorize: Object.freeze(authorize),
+      mounts: Object.freeze(mounts),
+      trustedModules: Object.freeze(trustedModules),
       directory: policy.directory,
-      memory: policy.memory,
+      luaMemory: policy.lua_memory,
       timeout: policy.timeout,
     });
   }
@@ -124,10 +126,10 @@ export function serializeConfig(config: ConnectorConfig): string {
   for (const [name, policy] of Object.entries(config.policies)) {
     policies[name] = {
       entry: policy.entry,
-      register: { ...policy.register },
-      authorize: [...policy.authorize],
+      mounts: Object.fromEntries(policy.mounts.map((mount) => [mount.moduleName, mount.sourcePath])),
+      trusted_modules: [...policy.trustedModules],
       directory: policy.directory,
-      memory: policy.memory,
+      lua_memory: policy.luaMemory,
       timeout: policy.timeout,
     };
   }

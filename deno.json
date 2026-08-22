@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "license": "AGPL-3.0-only",
-  "links": ["../portable-agents/sdk"],
+  "links": ["../portable-agents"],
   "tasks": {
     "test": "deno test --frozen --allow-read --allow-write --allow-env --allow-run --allow-net tests",
     "check": "deno fmt --check && deno lint && deno check src/main.ts && deno task test && deno task compile",

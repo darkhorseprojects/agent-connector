@@ -1,5 +1,5 @@
 import { s } from "@sapphire/shapeshift";
-import { Agent } from "@darkhorseprojects/portable-agents";
+import { type Agent, check, run } from "@darkhorseprojects/portable-agents";
 import type { Policy } from "../config.ts";
 
 export type AgentEvent =
@@ -12,14 +12,16 @@ export type AgentEvent =
   | Readonly<{ type: "store"; result: number; start: number }>;
 
 function agent(policy: Policy): Agent {
-  return Agent.directory(policy.directory, policy.entry, {
-    register: policy.register,
-    authorize: policy.authorize,
-  });
+  return {
+    target: { directory: policy.directory },
+    entryPath: policy.entry,
+    mounts: policy.mounts,
+    trustedModules: policy.trustedModules,
+  };
 }
 
 export async function checkAgent(policy: Policy, signal?: AbortSignal): Promise<void> {
-  await agent(policy).check({ memory: policy.memory, timeout: policy.timeout, signal });
+  await check(agent(policy), { luaMemory: policy.luaMemory, timeout: policy.timeout, signal });
 }
 
 export function runAgent(
@@ -31,11 +33,11 @@ export function runAgent(
   environment?: Readonly<Record<string, string>>,
 ): AsyncIterable<AgentEvent> {
   return parseAgentOutput(
-    agent(policy).run(new TextEncoder().encode(input), {
+    run(agent(policy), new TextEncoder().encode(input), {
       arguments: [actor],
       environment,
       cwd: policy.directory,
-      memory: policy.memory,
+      luaMemory: policy.luaMemory,
       timeout: policy.timeout,
       signal,
     }),
