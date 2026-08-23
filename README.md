@@ -19,7 +19,8 @@ deno task check
 deno task compile
 ```
 
-The compiled executable embeds the SDK and has no runtime SDK dependency. The executable, exact registration sources,
+The compiled executable embeds the SDK and has no runtime SDK dependency. The Portable Agents `agent` executable and
+matching Lua 5.5 shared library must be available at runtime. The Connector executable, exact registration sources,
 service examples, README, license, and third-party notices are written under `dist/`.
 
 ## Configuration
@@ -65,8 +66,15 @@ guilds:
 
 Every mount and trusted module is visible in policy YAML. Connector does not append Discord values during invocation.
 Relative mount paths resolve in the agent package; external mount paths are absolute. Lua memory, timeout, concurrency,
-and every limit are required and have no Connector defaults. Workers run with `cwd = policy.directory`; they never
-inherit the directory from which Connector was launched.
+and every limit are required and have no Connector defaults. Each invocation starts one disposable `agent` process with
+a fresh package image and Lua state. The process runs with `cwd = policy.directory`; it never inherits the directory
+from which Connector was launched.
+
+`lua_memory` is a Lua allocator quota and a separate input-length bound, not an RSS limit. `timeout` is armed inside the
+`agent` process before package work and stops Lua, native calls, and blocked I/O with status 124. Executable startup and
+caller wake-up sit outside that duration, so externally observed time is slightly longer. Hard expiration skips
+finalizers and may have empty stderr. Neither timeout nor Connector cancellation cleans up descendants created by
+trusted Lua or native modules.
 
 Direct messages route by user. Exact channels precede inherited thread-parent channels. Guild fallback requires a bot
 mention. Bots, webhooks, and empty requests are ignored.
@@ -85,8 +93,8 @@ token. It does not discover package files or infer Zinc capabilities. With an ex
 validates every policy, optionally replaces the token, and prints the invite URL. Edit policy and route YAML directly,
 then run `agc check`.
 
-`run` stays attached. Shutdown stops admission, rejects queued work, aborts active workers, revokes RPC capabilities,
-disconnects Discord, and exits.
+`run` stays attached. Shutdown stops admission, rejects queued work, aborts active `agent` processes, revokes RPC
+capabilities, disconnects Discord, and exits.
 
 ## Discord registration
 
@@ -133,8 +141,8 @@ by `pending_requests` globally and `pending_per_actor` for one actor. Capacity r
 
 The authenticated loopback bridge provides invocation context and generic Discord REST requests. It validates methods,
 Discord REST paths, query values, actual audit-reason constraints, files, authentication, revocation, required
-`Content-Length`, and configured request/response bytes. Base64 file data is contained by the request-body bound. It
-never exposes the bot token.
+`Content-Length`, and configured request/response bytes. The request-body bound also covers Base64 file data. It never
+exposes the bot token.
 
 ## Background operation
 

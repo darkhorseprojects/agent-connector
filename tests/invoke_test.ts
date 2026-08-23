@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { dirname } from "@std/path";
 import { type AgentEvent, parseAgentOutput as parseBoundedAgentOutput, runAgent } from "../src/runtime/invoke.ts";
 
 const encoder = new TextEncoder();
@@ -30,19 +31,21 @@ Deno.test({
   ignore: Deno.build.os === "windows",
   async fn() {
     const root = await Deno.makeTempDir({ prefix: "connector-cwd-" });
-    const bin = await Deno.makeTempDir({ prefix: "connector-bin-" });
     try {
       await Deno.writeTextFile(`${root}/marker.txt`, "policy-directory");
       await Deno.writeTextFile(
-        `${bin}/agent`,
-        '#!/bin/sh\ncat >/dev/null\nvalue=$(cat marker.txt)\nprintf \'{"type":"response","text":"%s"}\\n{"type":"response_complete","result":1}\\n{"type":"store","result":1,"start":1}\\n\' "$value"\n',
+        `${root}/entry.lua`,
+        `local file=assert(io.open("marker.txt","rb"))
+local value=assert(file:read("a")); assert(file:close())
+coroutine.yield('{"type":"response","text":"'..value..'"}\\n')
+coroutine.yield('{"type":"response_complete","result":1}\\n')
+coroutine.yield('{"type":"store","result":1,"start":1}\\n')`,
       );
-      await Deno.chmod(`${bin}/agent`, 0o755);
       const events = await collect(runAgent(
         {
           entry: "entry.lua",
           mounts: [],
-          trustedModules: [],
+          trustedModules: ["entry"],
           directory: root,
           luaMemory: "96MiB",
           timeout: "30s",
@@ -51,12 +54,11 @@ Deno.test({
         "request",
         MAXIMUM_EVENT_BYTES,
         undefined,
-        { PATH: `${bin}:${Deno.env.get("PATH") ?? ""}` },
+        { PATH: `${dirname(Deno.env.get("AGENT_BIN") ?? "agent")}:${Deno.env.get("PATH") ?? ""}` },
       ));
       assertEquals(events[0], { type: "response", text: "policy-directory" });
     } finally {
       await Deno.remove(root, { recursive: true });
-      await Deno.remove(bin, { recursive: true });
     }
   },
 });

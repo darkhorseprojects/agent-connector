@@ -3,7 +3,7 @@ import { type Agent, run } from "@darkhorseprojects/portable-agents";
 import { fromFileUrl, join } from "@std/path";
 import { type DiscordRest, DiscordRpcServer } from "../src/discord/rpc.ts";
 
-Deno.test("real worker receives the exact Discord value", async () => {
+Deno.test("direct agent process receives the exact Discord value", async () => {
   const root = await Deno.makeTempDir({ prefix: "connector-integration-" });
   const rest = new Proxy({}, { get: () => () => Promise.resolve({}) }) as DiscordRest;
   const rpc = new DiscordRpcServer(rest, 8_388_608);
