@@ -25,7 +25,6 @@ policies:
     trusted_modules: [src.host, src.models, src.store, discord]
     directory: ${JSON.stringify(directory)}
     lua_memory: 96MiB
-    timeout: 30s
 users:
   "345678901234567890": zinc
 channels:
@@ -46,7 +45,6 @@ Deno.test("config parses exact explicit v1 data", () => {
   });
   assertEquals(config.policies.zinc.directory, directory);
   assertEquals(config.policies.zinc.luaMemory, "96MiB");
-  assertEquals(config.policies.zinc.timeout, "30s");
   assertEquals(config.policies.zinc.mounts[0].sourcePath, "host.md");
   assertEquals(config.policies.zinc.trustedModules, ["src.host", "src.models", "src.store", "discord"]);
 });

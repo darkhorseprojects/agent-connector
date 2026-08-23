@@ -24,7 +24,6 @@ Deno.test("configuration serialization preserves explicit policy", () => {
         trustedModules: Object.freeze(["src.host", "src.models", "src.store", "discord"]),
         directory,
         luaMemory: "96MiB",
-        timeout: "30s",
       }),
     }),
     users: Object.freeze({ "345678901234567890": "zinc" }),

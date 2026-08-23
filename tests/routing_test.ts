@@ -20,14 +20,12 @@ policies:
     trusted_modules: []
     directory: /tmp
     lua_memory: 96MiB
-    timeout: 30s
   analyst:
     entry: analyst.md
     mounts: {}
     trusted_modules: []
     directory: /tmp
     lua_memory: 96MiB
-    timeout: 30s
 users:
   "345678901234567890": zinc
 channels:

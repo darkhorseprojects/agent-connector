@@ -21,7 +21,7 @@ function agent(policy: Policy): Agent {
 }
 
 export async function checkAgent(policy: Policy, signal?: AbortSignal): Promise<void> {
-  await check(agent(policy), { luaMemory: policy.luaMemory, timeout: policy.timeout, signal });
+  await check(agent(policy), { luaMemory: policy.luaMemory, signal });
 }
 
 export function runAgent(
@@ -38,7 +38,6 @@ export function runAgent(
       environment,
       cwd: policy.directory,
       luaMemory: policy.luaMemory,
-      timeout: policy.timeout,
       signal,
     }),
     maximumEventBytes,

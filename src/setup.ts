@@ -74,7 +74,6 @@ export async function setupNewConfig(directory: string): Promise<void> {
     trustedModules: Object.freeze(names(ask("Trusted modules (comma-separated)", "discord"))),
     directory: canonical,
     luaMemory: ask("Lua memory limit", "96MiB"),
-    timeout: ask("Timeout duration", "30s"),
   });
   const concurrency = positiveInteger("Maximum concurrent agents", "4");
 

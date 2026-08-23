@@ -8,7 +8,6 @@ export type Policy = Readonly<{
   trustedModules: readonly string[];
   directory: string;
   luaMemory: string;
-  timeout: string;
 }>;
 
 export type ConnectorLimits = Readonly<{
@@ -55,7 +54,6 @@ const policySchema = s.object({
   trusted_modules: text.array(),
   directory: text,
   lua_memory: text,
-  timeout: text,
 }).strict();
 
 export function parseConfig(source: string): ConnectorConfig {
@@ -94,7 +92,6 @@ export function parseConfig(source: string): ConnectorConfig {
       trustedModules: Object.freeze(trustedModules),
       directory: policy.directory,
       luaMemory: policy.lua_memory,
-      timeout: policy.timeout,
     });
   }
 
@@ -130,7 +127,6 @@ export function serializeConfig(config: ConnectorConfig): string {
       trusted_modules: [...policy.trustedModules],
       directory: policy.directory,
       lua_memory: policy.luaMemory,
-      timeout: policy.timeout,
     };
   }
   return stringifyYaml({

@@ -20,7 +20,6 @@ policies:
     trusted_modules: [discord]
     directory: /agents/zinc
     lua_memory: 96MiB
-    timeout: 30s
 users: {}
 channels: {}
 guilds: {}

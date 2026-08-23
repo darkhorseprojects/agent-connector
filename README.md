@@ -54,7 +54,6 @@ policies:
       - discord
     directory: /absolute/path/to/zinc
     lua_memory: 96MiB
-    timeout: 30s
 
 users:
   "345678901234567890": zinc
@@ -65,16 +64,15 @@ guilds:
 ```
 
 Every mount and trusted module is visible in policy YAML. Connector does not append Discord values during invocation.
-Relative mount paths resolve in the agent package; external mount paths are absolute. Lua memory, timeout, concurrency,
-and every limit are required and have no Connector defaults. Each invocation starts one disposable `agent` process with
-a fresh package image and Lua state. The process runs with `cwd = policy.directory`; it never inherits the directory
-from which Connector was launched.
+Relative mount paths resolve in the agent package; external mount paths are absolute. Lua memory, concurrency, and every
+Connector limit are required and have no defaults. Each invocation starts one disposable `agent` process with a fresh
+package image and Lua state. The process runs with `cwd = policy.directory`; it never inherits the directory from which
+Connector was launched.
 
-`lua_memory` is a Lua allocator quota and a separate input-length bound, not an RSS limit. `timeout` is armed inside the
-`agent` process before package work and stops Lua, native calls, and blocked I/O with status 124. Executable startup and
-caller wake-up sit outside that duration, so externally observed time is slightly longer. Hard expiration skips
-finalizers and may have empty stderr. Neither timeout nor Connector cancellation cleans up descendants created by
-trusted Lua or native modules.
+`lua_memory` guards checked live Lua memory above the prepared runtime baseline and separately bounds input length; it
+is not a hard per-allocation or RSS limit. Connector owns each direct `agent` process and aborts it during shutdown or
+request cancellation. Deployment-level wall deadlines belong to the service manager or container. Cancellation does not
+clean up descendants created by trusted Lua or native modules.
 
 Direct messages route by user. Exact channels precede inherited thread-parent channels. Guild fallback requires a bot
 mention. Bots, webhooks, and empty requests are ignored.

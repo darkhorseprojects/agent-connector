@@ -39,7 +39,6 @@ Deno.test("direct agent process receives the exact Discord value", async () => {
         executable: Deno.env.get("AGENT_BIN") ?? "agent",
         environment,
         luaMemory: "96MiB",
-        timeout: "30s",
       })
     ) {
       output += decoder.decode(chunk, { stream: true });
