@@ -1,5 +1,4 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { dirname } from "@std/path";
 import { type AgentEvent, parseAgentOutput as parseBoundedAgentOutput, runAgent } from "../src/runtime/invoke.ts";
 
 const encoder = new TextEncoder();
@@ -52,8 +51,6 @@ coroutine.yield('{"type":"store","result":1,"start":1}\\n')`,
         "actor",
         "request",
         MAXIMUM_EVENT_BYTES,
-        undefined,
-        { PATH: `${dirname(Deno.env.get("AGENT_BIN") ?? "agent")}:${Deno.env.get("PATH") ?? ""}` },
       ));
       assertEquals(events[0], { type: "response", text: "policy-directory" });
     } finally {

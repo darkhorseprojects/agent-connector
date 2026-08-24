@@ -19,9 +19,9 @@ deno task check
 deno task compile
 ```
 
-The compiled executable embeds the SDK and has no runtime SDK dependency. The Portable Agents `agent` executable and
-matching Lua 5.5 shared library must be available at runtime. The Connector executable, exact registration sources,
-service examples, README, license, and third-party notices are written under `dist/`.
+The compiled executable embeds the SDK and has no runtime SDK dependency. `deno task compile` copies the exact sibling
+Portable Agents executable and matching Lua 5.5 shared library into `dist/`; it never searches PATH. The Connector
+executable, exact registration sources, service examples, README, license, and third-party notices are included there.
 
 ## Configuration
 
@@ -48,6 +48,8 @@ policies:
       design: design.md
       discord: /absolute/path/to/agent-connector/registrations/discord.md
     trusted_modules:
+      - src.cygnet
+      - src.dependencies
       - src.host
       - src.models
       - src.store

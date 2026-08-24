@@ -3,6 +3,7 @@ import { DiscordMessageStream, splitDiscordMessage } from "./format.ts";
 
 const LIMIT = 2000;
 const UPDATE_INTERVAL = 400;
+const FOOTER_RESERVE = "\n-# result #9007199254740991 · start #9007199254740991".length;
 const sendOptions = (content: string) => ({ content, allowedMentions: { parse: [] as never[] } });
 
 export type RenderedMessage = Readonly<{
@@ -93,13 +94,13 @@ export class DiscordRenderer {
   async #complete(): Promise<void> {
     if (!this.#store) throw new Error("renderer received no terminal Store event");
     const footer = this.#footer(this.#store);
-    const response = this.#last?.kind === "response" && this.#last.messages.length ? this.#last : undefined;
-    if (response) {
-      const index = response.messages.length - 1;
-      const content = `${response.contents[index]}\n${footer}`;
+    const last = this.#last?.messages.length ? this.#last : undefined;
+    if (last) {
+      const index = last.messages.length - 1;
+      const content = `${last.contents[index]}\n${footer}`;
       if (content.length <= LIMIT) {
-        await response.messages[index].edit(sendOptions(content));
-        response.contents[index] = content;
+        await last.messages[index].edit(sendOptions(content));
+        last.contents[index] = content;
         return;
       }
     }
@@ -167,6 +168,12 @@ export class DiscordRenderer {
     const projected = this.#blocks.reduce((total, block) => total + block.stream.messageCount, 0);
     if (projected > this.#maximumOutputMessages) {
       throw new Error("agent output exceeds configured message limit");
+    }
+    if (projected === this.#maximumOutputMessages) {
+      const last = this.#blocks.at(-1)?.stream.snapshot().at(-1);
+      if (last && last.length > LIMIT - FOOTER_RESERVE) {
+        throw new Error("agent output exceeds configured message limit");
+      }
     }
   }
 

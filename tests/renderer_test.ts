@@ -72,7 +72,8 @@ Deno.test("renderer escapes nested fences and can send Store alone", async () =>
   await renderer.push({ type: "store", result: 1, start: 1 });
   await renderer.finish();
   assertStringIncludes(target.messages[0].content, "``\u200b`");
-  assertEquals(target.messages[1].content, "-# result #1 · start #1");
+  assertEquals(target.messages.length, 1);
+  assertStringIncludes(target.messages[0].content, "-# result #1 · start #1");
 });
 
 Deno.test("non-response Store footer follows the latest completed item", async () => {
@@ -84,8 +85,8 @@ Deno.test("non-response Store footer follows the latest completed item", async (
   await renderer.push({ type: "store", result: 3, start: 1 });
   await renderer.finish();
   assertEquals(target.messages[0].content, "earlier");
-  assertEquals(target.messages[1].content, "```lua\nreturn 1\n```");
-  assertEquals(target.messages[2].content, "-# result #3 · start #1");
+  assertEquals(target.messages[1].content, "```lua\nreturn 1\n```\n-# result #3 · start #1");
+  assertEquals(target.messages.length, 2);
 });
 
 Deno.test("renderer requires Store and rejects output after it", async () => {
@@ -148,6 +149,43 @@ Deno.test("renderer serializes slow Discord mutations", async () => {
   ]);
   await renderer.finish();
   assertEquals(maximumActive, 1);
+});
+
+Deno.test("one message can contain output and the terminal footer", async () => {
+  for (
+    const event of [
+      { type: "response", text: "answer" } as const,
+      { type: "tool_call", code: "return 1", result: 1 } as const,
+    ]
+  ) {
+    const target = new Target();
+    const renderer = new DiscordRenderer(target, { outputMessages: 1 });
+    await renderer.push(event);
+    if (event.type === "response") await renderer.push({ type: "response_complete", result: 1 });
+    await renderer.push({ type: "store", result: 1, start: 1 });
+    await renderer.finish();
+    assertEquals(target.messages.length, 1);
+    assertStringIncludes(target.messages[0].content, "-# result #1 · start #1");
+  }
+});
+
+Deno.test("renderer reserves footer bytes in the final message", async () => {
+  const id = Number.MAX_SAFE_INTEGER;
+  const footer = `-# result #${id} · start #${id}`;
+  const target = new Target();
+  const renderer = new DiscordRenderer(target, { outputMessages: 1 });
+  await renderer.push({ type: "response", text: "x".repeat(2000 - footer.length - 1) });
+  await renderer.push({ type: "response_complete", result: id });
+  await renderer.push({ type: "store", result: id, start: id });
+  await renderer.finish();
+  assertEquals(target.messages[0].content.length, 2000);
+
+  const overflow = new DiscordRenderer(new Target(), { outputMessages: 1 });
+  await assertRejects(
+    () => overflow.push({ type: "response", text: "x".repeat(2000 - footer.length) }),
+    Error,
+    "exceeds configured message limit",
+  );
 });
 
 Deno.test("renderer enforces the sent-message count", async () => {

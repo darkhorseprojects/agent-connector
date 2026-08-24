@@ -78,6 +78,23 @@ Deno.test("scheduler rejects global and per-actor queue overflow", async () => {
   await Promise.allSettled([actorActive, actorWaiting, other]);
 });
 
+Deno.test("a full waiting queue does not reject work that can start", async () => {
+  const scheduler = new Scheduler(2, 2, 2);
+  const controller = new AbortController();
+  const blocked = (signal: AbortSignal) =>
+    new Promise<never>((_resolve, reject) =>
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+    );
+  const active = scheduler.run("a", controller.signal, blocked);
+  const firstWaiting = scheduler.run("a", controller.signal, () => Promise.resolve("a2"));
+  const secondWaiting = scheduler.run("a", controller.signal, () => Promise.resolve("a3"));
+  assertEquals(scheduler.waitingCount, 2);
+  assertEquals(await scheduler.run("b", controller.signal, () => Promise.resolve("b1")), "b1");
+  controller.abort(new Error("done"));
+  await Promise.allSettled([active, firstWaiting, secondWaiting]);
+  await scheduler.close();
+});
+
 Deno.test("waiting cancellation releases per-actor capacity", async () => {
   const scheduler = new Scheduler(1, 2, 1);
   const activeController = new AbortController();

@@ -7,6 +7,23 @@ import { DiscordRenderer, type RenderTarget } from "./discord/renderer.ts";
 import { route } from "./route.ts";
 import { Scheduler, SchedulerCapacityError } from "./runtime/scheduler.ts";
 
+export async function reportIncident(
+  target: TextBasedChannel,
+  error: unknown,
+  incident = crypto.randomUUID().slice(0, 8),
+): Promise<void> {
+  console.error(`[${incident}] Agent request failed:`, error);
+  if (!target.isSendable()) return;
+  try {
+    await target.send({
+      content: `Request failed. Incident: ${incident}`,
+      allowedMentions: { parse: [] },
+    });
+  } catch (delivery) {
+    console.error(`[${incident}] Incident delivery failed:`, delivery);
+  }
+}
+
 export type ConnectorOptions = Readonly<{
   token: string;
   config: ConnectorConfig;
@@ -141,7 +158,7 @@ export class DiscordConnector {
           }
         } catch (error) {
           if (signal.aborted) throw error;
-          await this.#incident(target, error);
+          await reportIncident(target, error);
         }
       });
     } catch (error) {
@@ -155,18 +172,7 @@ export class DiscordConnector {
         }
         return;
       }
-      await this.#incident(channel, error);
-    }
-  }
-
-  async #incident(target: TextBasedChannel, error: unknown): Promise<void> {
-    const incident = crypto.randomUUID().slice(0, 8);
-    console.error(`[${incident}] Agent request failed:`, error);
-    if (target.isSendable()) {
-      await target.send({
-        content: `Request failed. Incident: ${incident}`,
-        allowedMentions: { parse: [] },
-      });
+      await reportIncident(channel, error);
     }
   }
 }

@@ -2,7 +2,7 @@ export class DiscordMessageStream {
   readonly #maximum: number;
   readonly #finalized: string[] = [];
   #tail = "";
-  #openFence: string | null = null;
+  #openFence: Fence | null = null;
 
   constructor(maximum = 2000) {
     validateMaximum(maximum);
@@ -27,7 +27,9 @@ export class DiscordMessageStream {
   snapshot(): string[] {
     const tail = this.#tail.trim();
     if (!tail) return [...this.#finalized];
-    return [...this.#finalized, renderChunk(tail, this.#maximum, this.#openFence).content];
+    const rendered = renderChunk(tail, this.#openFence).content;
+    if (rendered.length > this.#maximum) throw new Error("Discord chunk exceeds maximum");
+    return [...this.#finalized, rendered];
   }
 }
 
@@ -46,13 +48,16 @@ export function deriveThreadTitle(request: string, maximum = 48): string {
   return `${title.slice(0, end).trimEnd()}…`;
 }
 
-type RenderedChunk = Readonly<{ content: string; open: string | null }>;
-type TakenChunk = Readonly<{ content: string; open: string | null; remaining?: string }>;
+type Fence = Readonly<{ marker: string; info: string }>;
+type RenderedChunk = Readonly<{ content: string; open: Fence | null }>;
+type TakenChunk = Readonly<{ content: string; open: Fence | null; remaining?: string }>;
 
-function takeChunk(text: string, maximum: number, openFence: string | null): TakenChunk {
+function takeChunk(text: string, maximum: number, openFence: Fence | null): TakenChunk {
   const remaining = text.trimStart();
-  const prefix = openFence ? `${openFence}\n` : "";
-  const available = maximum - prefix.length - (openFence ? 4 : 0);
+  const prefix = openFence ? `${openFence.marker}${openFence.info}\n` : "";
+  const closing = openFence ? openFence.marker.length + 1 : 0;
+  const available = maximum - prefix.length - closing;
+  if (available <= 0) throw new Error("could not split Discord message");
   let split = Math.min(remaining.trimEnd().length, available);
   if (split < remaining.trimEnd().length) {
     const boundary = Math.max(
@@ -65,34 +70,37 @@ function takeChunk(text: string, maximum: number, openFence: string | null): Tak
   if (split > 0 && isLowSurrogate(remaining.charCodeAt(split))) split--;
   if (split <= 0) throw new Error("could not split Discord message");
 
-  let piece = remaining.slice(0, split).trim();
-  if (fenceState(piece, openFence) && prefix.length + piece.length + 4 > maximum) {
-    split -= 4;
-    if (split <= 0 || isLowSurrogate(remaining.charCodeAt(split))) split--;
-    piece = remaining.slice(0, split).trim();
+  let rendered: RenderedChunk;
+  while (true) {
+    const piece = remaining.slice(0, split).trim();
+    rendered = renderChunk(piece, openFence);
+    if (rendered.content.length <= maximum) break;
+    split -= rendered.content.length - maximum;
+    if (split > 0 && isLowSurrogate(remaining.charCodeAt(split))) split--;
+    if (split <= 0) throw new Error("could not split Discord message");
   }
-  const rendered = renderChunk(piece, maximum, openFence);
   const tail = remaining.slice(split).trimStart();
-  return {
-    ...rendered,
-    remaining: tail.trim().length ? tail : undefined,
-  };
+  return { ...rendered, remaining: tail.trim().length ? tail : undefined };
 }
 
-function renderChunk(piece: string, maximum: number, openFence: string | null): RenderedChunk {
-  const prefix = openFence ? `${openFence}\n` : "";
+function renderChunk(piece: string, openFence: Fence | null): RenderedChunk {
+  const prefix = openFence ? `${openFence.marker}${openFence.info}\n` : "";
   const open = fenceState(piece, openFence);
-  const suffix = open ? "\n```" : "";
-  const content = `${prefix}${piece}${suffix}`;
-  if (content.length > maximum) throw new Error("Discord chunk exceeds maximum");
-  return { content, open };
+  const suffix = open ? `\n${open.marker}` : "";
+  return { content: `${prefix}${piece}${suffix}`, open };
 }
 
-function fenceState(piece: string, initial: string | null): string | null {
+function fenceState(piece: string, initial: Fence | null): Fence | null {
   let open = initial;
-  for (const match of piece.matchAll(/```([A-Za-z0-9_-]*)/g)) {
-    if (open) open = null;
-    else open = `\`\`\`${match[1]}`;
+  for (const line of piece.split(/\r?\n/)) {
+    if (open) {
+      const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/);
+      if (closing && closing[1][0] === open.marker[0] && closing[1].length >= open.marker.length) open = null;
+      continue;
+    }
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
+    if (!opening || opening[1][0] === "`" && opening[2].includes("`")) continue;
+    open = Object.freeze({ marker: opening[1], info: opening[2] });
   }
   return open;
 }

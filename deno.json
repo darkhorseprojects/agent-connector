@@ -4,7 +4,7 @@
   "links": ["../portable-agents"],
   "tasks": {
     "test": "deno test --frozen --allow-read --allow-write --allow-env --allow-run --allow-net tests",
-    "check": "deno fmt --check && deno lint && deno check src/main.ts && deno task test && deno task compile",
+    "check": "deno run --frozen --allow-read --allow-run tools/check.ts",
     "compile": "deno run --frozen --allow-read --allow-write --allow-run tools/compile.ts"
   },
   "imports": {

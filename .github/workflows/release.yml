@@ -1,0 +1,220 @@
+name: agent-connector
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  PORTABLE_AGENTS_VERSION: 1.0.0
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      LD_LIBRARY_PATH: ${{ github.workspace }}/.lua/lib
+      DYLD_LIBRARY_PATH: ${{ github.workspace }}/.lua/lib
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          path: agent-connector
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: darkhorseprojects/portable-agents
+          ref: v${{ env.PORTABLE_AGENTS_VERSION }}
+          persist-credentials: false
+          path: portable-agents
+      - uses: luau-project/setup-lua@09c2083852bf88c626d60e51be3fbb279abd6e51
+        with:
+          lua-version: 5.5.0
+          luarocks-version: none
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: v2.9.3
+      - name: Expose Lua library names to Zig
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            source="$(find .lua -name 'liblua55.so' -print -quit)"
+            ln -sf "$(basename "$source")" .lua/lib/liblua.so
+            ln -sf "$(basename "$source")" .lua/lib/liblua5.5.so
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            source="$(find .lua -name 'liblua55.dylib' -print -quit)"
+            install_name_tool -id '@rpath/liblua55.dylib' "$source"
+            ln -sf "$(basename "$source")" .lua/lib/liblua.dylib
+            ln -sf "$(basename "$source")" .lua/lib/liblua5.5.dylib
+          else
+            source="$(find .lua -iname 'lua55.lib' -print -quit)"
+            if [[ -n "$source" ]]; then
+              cp "$source" .lua/lib/lua.lib
+              cp "$source" .lua/lib/lua5.5.lib
+            else
+              source="$(find .lua -iname 'liblua55.dll.a' -print -quit)"
+              cp "$source" .lua/lib/liblua.dll.a
+              cp "$source" .lua/lib/liblua5.5.dll.a
+            fi
+          fi
+      - name: Build exact Portable Agents dependency
+        shell: bash
+        run: |
+          cp -R .lua portable-agents/.lua
+          (cd portable-agents && zig build -Doptimize=ReleaseSafe --search-prefix ../.lua)
+      - name: Check Agent Connector
+        working-directory: agent-connector
+        run: |
+          deno task check
+          deno task compile
+
+  verify-release-version:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -F "\"version\": \"$version\"" deno.json
+
+  build-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify-release-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            id: linux-x86_64
+            executable: agc
+            agent: agent
+            library: liblua55.so
+            archive: tar.gz
+          - os: macos-14
+            id: macos-aarch64
+            executable: agc
+            agent: agent
+            library: liblua55.dylib
+            archive: tar.gz
+          - os: windows-latest
+            id: windows-x86_64
+            executable: agc.exe
+            agent: agent.exe
+            library: lua55.dll
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      LD_LIBRARY_PATH: ${{ github.workspace }}/.lua/lib
+      DYLD_LIBRARY_PATH: ${{ github.workspace }}/.lua/lib
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          path: agent-connector
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: darkhorseprojects/portable-agents
+          ref: v${{ env.PORTABLE_AGENTS_VERSION }}
+          persist-credentials: false
+          path: portable-agents
+      - uses: luau-project/setup-lua@09c2083852bf88c626d60e51be3fbb279abd6e51
+        with:
+          lua-version: 5.5.0
+          luarocks-version: none
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: v2.9.3
+      - name: Expose Lua library names to Zig
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            source="$(find .lua -name 'liblua55.so' -print -quit)"
+            ln -sf "$(basename "$source")" .lua/lib/liblua.so
+            ln -sf "$(basename "$source")" .lua/lib/liblua5.5.so
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            source="$(find .lua -name 'liblua55.dylib' -print -quit)"
+            install_name_tool -id '@rpath/liblua55.dylib' "$source"
+            ln -sf "$(basename "$source")" .lua/lib/liblua.dylib
+            ln -sf "$(basename "$source")" .lua/lib/liblua5.5.dylib
+          else
+            source="$(find .lua -iname 'lua55.lib' -print -quit)"
+            if [[ -n "$source" ]]; then
+              cp "$source" .lua/lib/lua.lib
+              cp "$source" .lua/lib/lua5.5.lib
+            else
+              source="$(find .lua -iname 'liblua55.dll.a' -print -quit)"
+              cp "$source" .lua/lib/liblua.dll.a
+              cp "$source" .lua/lib/liblua5.5.dll.a
+            fi
+          fi
+      - name: Compile distribution
+        shell: bash
+        run: |
+          cp -R .lua portable-agents/.lua
+          (cd portable-agents && zig build -Doptimize=ReleaseSmall --search-prefix ../.lua)
+          (cd agent-connector && deno task compile)
+          root="agent-connector-${GITHUB_REF_NAME}-${{ matrix.id }}"
+          mv agent-connector/dist "$root"
+          library="$(find .lua -name '${{ matrix.library }}' -print -quit)"
+          cp "$library" "$root/"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            ln -s '${{ matrix.library }}' "$root/liblua.so"
+            ln -s '${{ matrix.library }}' "$root/liblua5.5.so"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            ln -s '${{ matrix.library }}' "$root/liblua.dylib"
+            ln -s '${{ matrix.library }}' "$root/liblua5.5.dylib"
+          fi
+          "$root/${{ matrix.executable }}" --version | grep -F "${GITHUB_REF_NAME#v}"
+          "$root/${{ matrix.agent }}" --version | grep -F "agent $PORTABLE_AGENTS_VERSION"
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            7z a "$root.zip" "$root"
+          else
+            tar -czf "$root.tar.gz" "$root"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: agent-connector-${{ matrix.id }}
+          path: agent-connector-*.${{ matrix.archive }}
+          if-no-files-found: error
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: agent-connector-*
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: artifacts
+        run: sha256sum agent-connector-* > SHA256SUMS
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: artifacts/*
+          generate_release_notes: true

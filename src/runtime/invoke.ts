@@ -1,6 +1,38 @@
 import { s } from "@sapphire/shapeshift";
 import { type Agent, check, run } from "@darkhorseprojects/portable-agents";
+import { dirname, fromFileUrl, join } from "@std/path";
 import type { Policy } from "../config.ts";
+
+export const PORTABLE_AGENTS_VERSION = "1.0.0";
+
+export function agentExecutable(): string {
+  if (Deno.build.standalone) return join(dirname(Deno.execPath()), Deno.build.os === "windows" ? "agent.exe" : "agent");
+  return fromFileUrl(
+    new URL(
+      `../../../portable-agents/zig-out/bin/${Deno.build.os === "windows" ? "agent.exe" : "agent"}`,
+      import.meta.url,
+    ),
+  );
+}
+
+export async function verifyAgentVersion(): Promise<void> {
+  const command = new Deno.Command(agentExecutable(), {
+    args: ["--version"],
+    stdin: "null",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const output = await command.output();
+  const actual = new TextDecoder().decode(output.stdout).trim();
+  if (!output.success || actual !== `agent ${PORTABLE_AGENTS_VERSION}`) {
+    const diagnostic = new TextDecoder().decode(output.stderr).trim();
+    throw new Error(
+      `Portable Agents ${PORTABLE_AGENTS_VERSION} is required at ${agentExecutable()}: ${
+        diagnostic || actual || `status ${output.code}`
+      }`,
+    );
+  }
+}
 
 export type AgentEvent =
   | Readonly<{ type: "reasoning"; text: string }>
@@ -21,7 +53,7 @@ function agent(policy: Policy): Agent {
 }
 
 export async function checkAgent(policy: Policy, signal?: AbortSignal): Promise<void> {
-  await check(agent(policy), { luaMemory: policy.luaMemory, signal });
+  await check(agent(policy), { executable: agentExecutable(), luaMemory: policy.luaMemory, signal });
 }
 
 export function runAgent(
@@ -35,6 +67,7 @@ export function runAgent(
   return parseAgentOutput(
     run(agent(policy), new TextEncoder().encode(input), {
       arguments: [actor],
+      executable: agentExecutable(),
       environment,
       cwd: policy.directory,
       luaMemory: policy.luaMemory,

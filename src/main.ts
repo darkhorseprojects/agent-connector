@@ -3,7 +3,7 @@ import { basename, join, resolve } from "@std/path";
 import { type ConnectorConfig, parseConfig } from "./config.ts";
 import { DiscordConnector } from "./connector.ts";
 import { loadToken } from "./discord/credentials.ts";
-import { checkAgent } from "./runtime/invoke.ts";
+import { checkAgent, verifyAgentVersion } from "./runtime/invoke.ts";
 import { connectExistingConfig, setupNewConfig } from "./setup.ts";
 
 async function loadConfig(directory: string): Promise<ConnectorConfig> {
@@ -14,15 +14,18 @@ async function resolveDirectory(argument?: string): Promise<string> {
   return await Deno.realPath(resolve(Deno.cwd(), argument ?? "."));
 }
 
-async function connect(args: string[]): Promise<void> {
+export async function connect(args: string[]): Promise<void> {
   if (args.length > 1) throw new Error("usage: agc connect [DIRECTORY]");
   const directory = await resolveDirectory(args[0]);
+  let config: ConnectorConfig;
   try {
-    await connectExistingConfig(directory, await loadConfig(directory));
+    config = await loadConfig(directory);
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
     await setupNewConfig(directory);
+    return;
   }
+  await connectExistingConfig(directory, config);
 }
 
 async function check(args: string[]): Promise<void> {
@@ -78,6 +81,7 @@ Usage:
     console.log(manifest.version);
     return;
   }
+  await verifyAgentVersion();
   switch (command) {
     case "connect":
       await connect(args);

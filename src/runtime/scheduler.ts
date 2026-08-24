@@ -59,11 +59,12 @@ export class Scheduler {
   ): Promise<T> {
     signal.throwIfAborted();
     if (this.#closed !== undefined) return Promise.reject(this.#closed);
-    if (this.#waiting.length >= this.#maximumWaiting) {
+    const canStart = this.#active < this.#maximumActive && !this.#actors.has(actor);
+    if (!canStart && this.#waiting.length >= this.#maximumWaiting) {
       return Promise.reject(new SchedulerCapacityError("request queue is full"));
     }
     const actorWaiting = this.#waitingByActor.get(actor) ?? 0;
-    if (actorWaiting >= this.#maximumWaitingPerActor) {
+    if (!canStart && actorWaiting >= this.#maximumWaitingPerActor) {
       return Promise.reject(new SchedulerCapacityError("actor request queue is full"));
     }
     return new Promise<T>((resolve, reject) => {

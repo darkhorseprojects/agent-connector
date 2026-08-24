@@ -42,6 +42,20 @@ Deno.test("streaming splitter freezes completed chunks and balances fences", () 
   assertEquals(second.every((chunk) => (chunk.match(/```/g)?.length ?? 0) % 2 === 0), true);
 });
 
+Deno.test("splitter tracks line fences by delimiter and run length", () => {
+  const backticks = splitDiscordMessage(`\`\`\`\`lua\n${"value ``` inline\n".repeat(20)}\`\`\`\``, 80);
+  assertEquals(backticks.length > 1, true);
+  assertEquals(backticks.every((chunk) => chunk.length <= 80), true);
+  assertEquals(backticks.every((chunk) => chunk.startsWith("````lua") && chunk.endsWith("````")), true);
+
+  const tildes = splitDiscordMessage(`~~~text\n${"value\n".repeat(30)}~~~`, 64);
+  assertEquals(tildes.length > 1, true);
+  assertEquals(tildes.every((chunk) => chunk.startsWith("~~~text") && chunk.endsWith("~~~")), true);
+
+  const inline = splitDiscordMessage(`before \`\`\` after ${"word ".repeat(30)}`, 64);
+  assertEquals(inline.some((chunk) => chunk === "```" || chunk.startsWith("```\n")), false);
+});
+
 Deno.test("thread title is bounded without splitting Unicode", () => {
   const title = deriveThreadTitle("😀".repeat(40), 31);
   assertEquals(title.length <= 31, true);

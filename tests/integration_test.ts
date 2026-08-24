@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import { type Agent, run } from "@darkhorseprojects/portable-agents";
 import { fromFileUrl, join } from "@std/path";
 import { type DiscordRest, DiscordRpcServer } from "../src/discord/rpc.ts";
+import { agentExecutable } from "../src/runtime/invoke.ts";
 
 Deno.test("direct agent process receives the exact Discord value", async () => {
   const root = await Deno.makeTempDir({ prefix: "connector-integration-" });
@@ -36,7 +37,7 @@ Deno.test("direct agent process receives the exact Discord value", async () => {
     };
     for await (
       const chunk of run(agent, new Uint8Array(), {
-        executable: Deno.env.get("AGENT_BIN") ?? "agent",
+        executable: agentExecutable(),
         environment,
         luaMemory: "96MiB",
       })
