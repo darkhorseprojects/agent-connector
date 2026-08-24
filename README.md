@@ -69,10 +69,10 @@ Connector limit are required and have no defaults. Each invocation starts one di
 package image and Lua state. The process runs with `cwd = policy.directory`; it never inherits the directory from which
 Connector was launched.
 
-`lua_memory` guards checked live Lua memory above the prepared runtime baseline and separately bounds input length; it
-is not a hard per-allocation or RSS limit. Connector owns each direct `agent` process and aborts it during shutdown or
-request cancellation. Deployment-level wall deadlines belong to the service manager or container. Cancellation does not
-clean up descendants created by trusted Lua or native modules.
+`lua_memory` sets one total allocation-time budget for memory routed through Lua's allocator and separately bounds input
+length. It includes the prepared Lua state but is not an RSS limit. Connector owns each direct `agent` process and
+aborts it during shutdown or request cancellation. Deployment-level wall-clock and whole-process memory limits belong to
+the service manager or container. Cancellation does not clean up descendants created by trusted Lua or native modules.
 
 Direct messages route by user. Exact channels precede inherited thread-parent channels. Guild fallback requires a bot
 mention. Bots, webhooks, and empty requests are ignored.
