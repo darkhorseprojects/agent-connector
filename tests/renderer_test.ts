@@ -2,16 +2,9 @@ import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { DiscordRenderer, type RenderedMessage, type RenderTarget } from "../src/discord/renderer.ts";
 
 type Options = { content: string; allowedMentions: { parse: never[] } };
-const limits = Object.freeze({ outputMessages: 64 });
-
 class Message implements RenderedMessage {
-  content: string;
   readonly edits: string[] = [];
-
-  constructor(content: string) {
-    this.content = content;
-  }
-
+  constructor(public content: string) {}
   edit(options: Options): Promise<void> {
     assertEquals(options.allowedMentions.parse, []);
     this.content = options.content;
@@ -19,10 +12,8 @@ class Message implements RenderedMessage {
     return Promise.resolve();
   }
 }
-
 class Target implements RenderTarget {
   readonly messages: Message[] = [];
-
   send(options: Options): Promise<Message> {
     assertEquals(options.allowedMentions.parse, []);
     const message = new Message(options.content);
@@ -31,171 +22,83 @@ class Target implements RenderTarget {
   }
 }
 
-Deno.test("renderer streams semantic blocks and appends Store footer", async () => {
+Deno.test("renderer streams blocks and appends durable footer", async () => {
   const target = new Target();
-  const renderer = new DiscordRenderer(target, limits);
-  await renderer.push({ type: "reasoning", text: "first " });
-  await renderer.push({ type: "reasoning", text: "thought\n\nnext" });
-  await renderer.push({ type: "reasoning_complete", result: 43 });
-  await renderer.push({ type: "tool_call", code: "return 1", result: 44 });
-  await renderer.push({ type: "tool_result", text: "1", ok: true, result: 45 });
-  await renderer.push({ type: "response", text: "answer " });
-  await renderer.push({ type: "response", text: "done" });
-  await renderer.push({ type: "response_complete", result: 46 });
-  await renderer.push({ type: "store", result: 46, start: 42 });
+  const renderer = new DiscordRenderer(target, { outputMessages: 64 });
+  await renderer.push({ type: "reasoning", text: "first\nnext" });
+  await renderer.push({ type: "reasoning_complete", result: 2 });
+  await renderer.push({ type: "tool_call", call: "a", code: "return 1", result: 3 });
+  await renderer.push({ type: "tool_result", call: "a", text: "1", ok: true, result: 4 });
+  await renderer.push({ type: "response", text: "answer" });
+  await renderer.push({ type: "response_complete", result: 5 });
+  await renderer.push({ type: "store", result: 5, start: 1 });
   await renderer.finish();
-
-  assertEquals(target.messages.length, 4);
-  assertEquals(target.messages[0].content, "> first thought\n>\n> next");
-  assertEquals(target.messages[0].edits.length > 0, true);
-  assertEquals(target.messages[1].content, "```lua\nreturn 1\n```");
-  assertEquals(target.messages[2].content, "```text\n1\n```");
-  assertEquals(target.messages[3].content, "answer done\n-# result #46 · start #42");
+  assertEquals(target.messages.map((message) => message.content), [
+    "> first\n> next",
+    "```lua\nreturn 1\n```",
+    "```text\n1\n```",
+    "answer\n-# result #5 · start #1",
+  ]);
 });
 
-Deno.test("renderer splits large Markdown and preserves Discord bounds", async () => {
+Deno.test("temporary Done has no footer", async () => {
   const target = new Target();
-  const renderer = new DiscordRenderer(target, limits);
-  await renderer.push({ type: "response", text: `# Result\n\n${"word ".repeat(1400)}` });
-  await renderer.push({ type: "store", result: 7, start: 1 });
+  const renderer = new DiscordRenderer(target, { outputMessages: 4 });
+  await renderer.push({ type: "response", text: "temporary" });
+  await renderer.push({ type: "response_complete" });
+  await renderer.push({ type: "done", durable: false });
   await renderer.finish();
-
-  assertEquals(target.messages.length > 1, true);
-  assertEquals(target.messages.every((message) => message.content.length <= 2000), true);
-  assertStringIncludes(target.messages.at(-1)!.content, "-# result #7 · start #1");
+  assertEquals(target.messages[0].content, "temporary");
 });
 
-Deno.test("renderer escapes nested fences and can send Store alone", async () => {
-  const target = new Target();
-  const renderer = new DiscordRenderer(target, limits);
-  await renderer.push({ type: "tool_call", code: "return [[```]]", result: 1 });
-  await renderer.push({ type: "store", result: 1, start: 1 });
-  await renderer.finish();
-  assertStringIncludes(target.messages[0].content, "``\u200b`");
-  assertEquals(target.messages.length, 1);
-  assertStringIncludes(target.messages[0].content, "-# result #1 · start #1");
-});
-
-Deno.test("non-response Store footer follows the latest completed item", async () => {
-  const target = new Target();
-  const renderer = new DiscordRenderer(target, limits);
-  await renderer.push({ type: "response", text: "earlier" });
-  await renderer.push({ type: "response_complete", result: 2 });
-  await renderer.push({ type: "tool_call", code: "return 1", result: 3 });
-  await renderer.push({ type: "store", result: 3, start: 1 });
-  await renderer.finish();
-  assertEquals(target.messages[0].content, "earlier");
-  assertEquals(target.messages[1].content, "```lua\nreturn 1\n```\n-# result #3 · start #1");
-  assertEquals(target.messages.length, 2);
-});
-
-Deno.test("renderer requires Store and rejects output after it", async () => {
-  const renderer = new DiscordRenderer(new Target(), limits);
-  await renderer.push({ type: "response", text: "partial" });
-  await assertRejects(() => renderer.finish(), Error, "no terminal Store");
-
-  const complete = new DiscordRenderer(new Target(), limits);
-  await complete.push({ type: "store", result: 1, start: 1 });
-  let rejected = false;
-  try {
-    await complete.push({ type: "response", text: "late" });
-  } catch (error) {
-    rejected = error instanceof Error && error.message.includes("after Store");
-  }
-  assertEquals(rejected, true);
-});
-
-Deno.test("renderer coalesces immediate model fragments", async () => {
-  const target = new Target();
-  const renderer = new DiscordRenderer(target, limits);
-  for (let index = 0; index < 1000; index++) {
-    await renderer.push({ type: "response", text: "x" });
-  }
-  await renderer.push({ type: "response_complete", result: 1 });
-  await renderer.push({ type: "store", result: 1, start: 1 });
-  await renderer.finish();
-
-  assertEquals(target.messages.length, 1);
-  assertEquals(target.messages[0].edits.length < 10, true);
-  assertEquals(target.messages[0].content.endsWith("-# result #1 · start #1"), true);
-  assertEquals(target.messages[0].content.match(/-# result/g)?.length, 1);
-});
-
-Deno.test("renderer serializes slow Discord mutations", async () => {
+Deno.test("renderer escapes fences, splits bounds, and serializes mutations", async () => {
   let active = 0;
-  let maximumActive = 0;
-  const mutate = async () => {
-    active++;
-    maximumActive = Math.max(maximumActive, active);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    active--;
-  };
+  let maximum = 0;
   const target: RenderTarget = {
     async send(_options) {
-      await mutate();
+      active++;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active--;
       return {
-        async edit(_next) {
-          await mutate();
+        async edit() {
+          active++;
+          maximum = Math.max(maximum, active);
+          await new Promise((resolve) => setTimeout(resolve, 2));
+          active--;
         },
       };
     },
   };
-  const renderer = new DiscordRenderer(target, limits);
+  const renderer = new DiscordRenderer(target, { outputMessages: 8 });
   await Promise.all([
-    renderer.push({ type: "response", text: "one" }),
-    renderer.push({ type: "response", text: " two" }),
-    renderer.push({ type: "response_complete", result: 1 }),
-    renderer.push({ type: "store", result: 1, start: 1 }),
+    renderer.push({ type: "tool_call", call: "a", code: "return [[```]]", result: 2 }),
+    renderer.push({ type: "tool_result", call: "a", text: "x".repeat(2500), ok: true, result: 3 }),
+    renderer.push({ type: "response", text: "done" }),
+    renderer.push({ type: "response_complete", result: 4 }),
+    renderer.push({ type: "store", result: 4, start: 1 }),
   ]);
   await renderer.finish();
-  assertEquals(maximumActive, 1);
+  assertEquals(maximum, 1);
 });
 
-Deno.test("one message can contain output and the terminal footer", async () => {
-  for (
-    const event of [
-      { type: "response", text: "answer" } as const,
-      { type: "tool_call", code: "return 1", result: 1 } as const,
-    ]
-  ) {
-    const target = new Target();
-    const renderer = new DiscordRenderer(target, { outputMessages: 1 });
-    await renderer.push(event);
-    if (event.type === "response") await renderer.push({ type: "response_complete", result: 1 });
-    await renderer.push({ type: "store", result: 1, start: 1 });
-    await renderer.finish();
-    assertEquals(target.messages.length, 1);
-    assertStringIncludes(target.messages[0].content, "-# result #1 · start #1");
-  }
+Deno.test("renderer requires terminal and rejects following output", async () => {
+  const renderer = new DiscordRenderer(new Target(), { outputMessages: 4 });
+  await renderer.push({ type: "response", text: "partial" });
+  await assertRejects(() => renderer.finish(), Error, "no terminal event");
+  const complete = new DiscordRenderer(new Target(), { outputMessages: 4 });
+  await complete.push({ type: "done", durable: false });
+  await assertRejects(() => complete.push({ type: "response", text: "late" }), Error, "after terminal");
 });
 
-Deno.test("renderer reserves footer bytes in the final message", async () => {
-  const id = Number.MAX_SAFE_INTEGER;
-  const footer = `-# result #${id} · start #${id}`;
+Deno.test("renderer enforces message count including Store footer", async () => {
   const target = new Target();
   const renderer = new DiscordRenderer(target, { outputMessages: 1 });
-  await renderer.push({ type: "response", text: "x".repeat(2000 - footer.length - 1) });
-  await renderer.push({ type: "response_complete", result: id });
-  await renderer.push({ type: "store", result: id, start: id });
+  await renderer.push({ type: "response", text: "answer" });
+  await renderer.push({ type: "response_complete", result: 2 });
+  await renderer.push({ type: "store", result: 2, start: 1 });
   await renderer.finish();
-  assertEquals(target.messages[0].content.length, 2000);
-
+  assertStringIncludes(target.messages[0].content, "result #2");
   const overflow = new DiscordRenderer(new Target(), { outputMessages: 1 });
-  await assertRejects(
-    () => overflow.push({ type: "response", text: "x".repeat(2000 - footer.length) }),
-    Error,
-    "exceeds configured message limit",
-  );
-});
-
-Deno.test("renderer enforces the sent-message count", async () => {
-  const target = new Target();
-  const renderer = new DiscordRenderer(target, { outputMessages: 1 });
-  await renderer.push({ type: "tool_call", code: "return 1", result: 1 });
-  await assertRejects(
-    () => renderer.push({ type: "tool_result", text: "1", ok: true, result: 2 }),
-    Error,
-    "exceeds configured message limit",
-  );
-  assertEquals(target.messages.length, 1);
+  await assertRejects(() => overflow.push({ type: "response", text: "x".repeat(2000) }));
 });

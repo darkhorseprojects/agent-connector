@@ -12,8 +12,8 @@
     "@std/fs": "jsr:@std/fs@1.0.24",
     "@std/path": "jsr:@std/path@1.1.6",
     "@std/yaml": "jsr:@std/yaml@1.2.0",
-    "@sapphire/shapeshift": "npm:@sapphire/shapeshift@4.0.0",
-    "discord.js": "npm:discord.js@14.27.0"
+    "discord.js": "npm:discord.js@14.27.0",
+    "effect": "npm:effect@3.22.1"
   },
   "fmt": {
     "lineWidth": 120,

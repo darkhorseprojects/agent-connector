@@ -3,7 +3,7 @@ import { DiscordMessageStream, splitDiscordMessage } from "./format.ts";
 
 const LIMIT = 2000;
 const UPDATE_INTERVAL = 400;
-const FOOTER_RESERVE = "\n-# result #9007199254740991 · start #9007199254740991".length;
+const FOOTER_RESERVE = "\n-# result # · start #".length + String(Number.MAX_SAFE_INTEGER).length * 2;
 const sendOptions = (content: string) => ({ content, allowedMentions: { parse: [] as never[] } });
 
 export type RenderedMessage = Readonly<{
@@ -27,11 +27,10 @@ type Block = {
 export class DiscordRenderer {
   readonly #target: RenderTarget;
   readonly #maximumOutputMessages: number;
-  readonly #blocks: Block[] = [];
   #sentMessages = 0;
   #current: Block | undefined;
   #last: Block | undefined;
-  #store: Extract<AgentEvent, { type: "store" }> | undefined;
+  #terminal: Extract<AgentEvent, { type: "store" | "done" }> | undefined;
   #pending: Promise<void> = Promise.resolve();
   #finished: Promise<void> | undefined;
 
@@ -48,10 +47,10 @@ export class DiscordRenderer {
   }
 
   async #push(event: AgentEvent): Promise<void> {
-    if (this.#store) throw new Error("renderer received output after Store");
-    if (event.type === "store") {
+    if (this.#terminal) throw new Error("renderer received output after terminal event");
+    if (event.type === "store" || event.type === "done") {
       await this.#flushCurrent();
-      this.#store = event;
+      this.#terminal = event;
       this.#current = undefined;
       return;
     }
@@ -78,13 +77,13 @@ export class DiscordRenderer {
     const value = raw.replaceAll("```", "``\u200b`");
     const block = this.#block("fixed");
     block.stream.append(`\`\`\`${language}\n${value}\n\`\`\``);
-    this.#checkMessages();
+    this.#checkMessages(block);
     await this.#render(block, true);
     this.#last = block;
   }
 
   get terminal(): boolean {
-    return this.#store !== undefined;
+    return this.#terminal !== undefined;
   }
 
   finish(): Promise<void> {
@@ -92,8 +91,9 @@ export class DiscordRenderer {
   }
 
   async #complete(): Promise<void> {
-    if (!this.#store) throw new Error("renderer received no terminal Store event");
-    const footer = this.#footer(this.#store);
+    if (!this.#terminal) throw new Error("renderer received no terminal event");
+    if (this.#terminal.type === "done") return;
+    const footer = this.#footer(this.#terminal);
     const last = this.#last?.messages.length ? this.#last : undefined;
     if (last) {
       const index = last.messages.length - 1;
@@ -117,14 +117,13 @@ export class DiscordRenderer {
       quoteAtLineStart: true,
       quoted: false,
     };
-    this.#blocks.push(block);
     return block;
   }
 
   #append(block: Block, value: string): void {
     if (block.kind !== "reasoning") {
       block.stream.append(value);
-      this.#checkMessages();
+      this.#checkMessages(block);
       return;
     }
     let rendered = "";
@@ -138,7 +137,7 @@ export class DiscordRenderer {
       if (character === "\n") block.quoteAtLineStart = true;
     }
     block.stream.append(rendered);
-    this.#checkMessages();
+    this.#checkMessages(block);
   }
 
   async #flushCurrent(): Promise<void> {
@@ -146,7 +145,7 @@ export class DiscordRenderer {
     if (this.#current.kind === "reasoning" && this.#current.quoted && this.#current.quoteAtLineStart) {
       this.#current.stream.append(">");
       this.#current.quoteAtLineStart = false;
-      this.#checkMessages();
+      this.#checkMessages(this.#current);
     }
     await this.#render(this.#current, true);
   }
@@ -164,16 +163,14 @@ export class DiscordRenderer {
     block.lastMutation = now;
   }
 
-  #checkMessages(): void {
-    const projected = this.#blocks.reduce((total, block) => total + block.stream.messageCount, 0);
-    if (projected > this.#maximumOutputMessages) {
+  #checkMessages(block: Block): void {
+    const projected = this.#sentMessages + block.stream.messageCount - block.messages.length;
+    const last = block.stream.snapshot().at(-1);
+    if (
+      projected > this.#maximumOutputMessages ||
+      projected === this.#maximumOutputMessages && last && last.length > LIMIT - FOOTER_RESERVE
+    ) {
       throw new Error("agent output exceeds configured message limit");
-    }
-    if (projected === this.#maximumOutputMessages) {
-      const last = this.#blocks.at(-1)?.stream.snapshot().at(-1);
-      if (last && last.length > LIMIT - FOOTER_RESERVE) {
-        throw new Error("agent output exceeds configured message limit");
-      }
     }
   }
 

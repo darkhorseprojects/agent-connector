@@ -31,7 +31,7 @@ The following pinned packages are licensed under MIT. Copyright and attribution 
 distributions:
 
 - `@sapphire/async-queue`
-- `@sapphire/shapeshift`
+- `@sapphire/shapeshift` (discord.js transitive dependency)
 - `@sapphire/snowflake`
 - `@types/node`
 - `@types/ws`
@@ -47,6 +47,12 @@ distributions:
 - `ws`
 
 Their exact versions and integrity hashes are recorded in `deno.lock`.
+
+## Effect
+
+- Package: `effect`
+- License: MIT
+- Source: https://github.com/Effect-TS/effect
 
 ## tslib
 

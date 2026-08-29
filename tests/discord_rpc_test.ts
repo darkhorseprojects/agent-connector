@@ -32,19 +32,8 @@ Deno.test("Discord RPC scopes context and forwards generic REST requests", async
   const token = capability.environment.AGENT_CONNECTOR_DISCORD_TOKEN;
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   try {
-    const unauthorized = await fetch(`${url}/v1/context`);
+    const unauthorized = await fetch(`${url}/v1/request`);
     assertEquals(unauthorized.status, 401);
-
-    const context = await fetch(`${url}/v1/context`, { headers });
-    assertEquals(context.status, 200);
-    assertEquals(await context.json(), {
-      actor: "discord:actor",
-      policy: "zinc",
-      userId: "1",
-      messageId: "2",
-      channelId: "3",
-      guildId: "4",
-    });
 
     const response = await fetch(`${url}/v1/request`, {
       method: "POST",
@@ -59,7 +48,7 @@ Deno.test("Discord RPC scopes context and forwards generic REST requests", async
       }),
     });
     assertEquals(response.status, 200);
-    assertEquals(await response.json(), { value: { id: "response", method: "POST" } });
+    assertEquals(await response.json(), { id: "response", method: "POST" });
     assertEquals(calls.length, 1);
     assertEquals(calls[0].method, "POST");
     assertEquals(calls[0].route, "/channels/3/messages");
@@ -75,7 +64,7 @@ Deno.test("Discord RPC scopes context and forwards generic REST requests", async
     assertEquals(new TextDecoder().decode(options.files[0].data), "value");
 
     capability.revoke();
-    assertEquals((await fetch(`${url}/v1/context`, { headers })).status, 401);
+    assertEquals((await fetch(`${url}/v1/request`, { method: "POST", headers, body: "{}" })).status, 401);
   } finally {
     capability.revoke();
     await server.close();
@@ -173,7 +162,7 @@ Deno.test("Discord RPC validates routes and explicit revocation", async () => {
     assertEquals(valid.status, 200);
     assertEquals(calls[0].route, "/channels/123/messages");
     capability.revoke();
-    assertEquals((await fetch(`${url}/v1/context`, { headers })).status, 401);
+    assertEquals((await fetch(`${url}/v1/request`, { method: "POST", headers, body: "{}" })).status, 401);
   } finally {
     capability.revoke();
     await server.close();
