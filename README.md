@@ -24,6 +24,8 @@ policies:
     mounts: {}
     trusted_modules:
       - "src.models"
+      - "src.store"
+      - "src.cygnet"
     lua_memory: "96MiB"
     process_memory: "512MiB"
     wall_time: "2m"

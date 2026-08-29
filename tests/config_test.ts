@@ -21,7 +21,7 @@ policies:
     entry: zinc.md
     mounts:
       design: design.md
-    trusted_modules: [src.models]
+    trusted_modules: [src.models, src.store, src.cygnet]
     lua_memory: 96MiB
     process_memory: 512MiB
     wall_time: 2m
@@ -36,7 +36,7 @@ Deno.test("configuration decodes directly to policies", () => {
   assertEquals(config.discord, { application, bot });
   assertEquals(config.limits.pendingRequests, 64);
   assertEquals(config.policies.zinc.mounts, { design: "design.md" });
-  assertEquals(config.policies.zinc.trust, ["src.models"]);
+  assertEquals(config.policies.zinc.trust, ["src.models", "src.store", "src.cygnet"]);
   assertEquals(config.users[user], "zinc");
 });
 
