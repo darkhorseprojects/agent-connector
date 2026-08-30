@@ -1,40 +1,23 @@
-import { Schema } from "effect";
-
-export type DiscordContext = Readonly<
-  {
-    actor: string;
-    policy: string;
-    userId: string;
-    messageId: string;
-    channelId: string;
-    parentChannelId?: string;
-    guildId?: string;
-  }
->;
-type RestOptions = Readonly<
-  {
-    body?: unknown;
-    query?: URLSearchParams;
-    reason?: string;
-    files?: readonly Readonly<{ data: Uint8Array; name: string; contentType?: string }>[];
-  }
->;
+export type DiscordContext = Readonly<{
+  actor: string;
+  policy: string;
+  userId: string;
+  messageId: string;
+  channelId: string;
+  parentChannelId?: string;
+  guildId?: string;
+}>;
+type RestOptions = Readonly<{
+  body?: unknown;
+  query?: URLSearchParams;
+  reason?: string;
+  files?: readonly Readonly<{ data: Uint8Array; name: string; contentType?: string }>[];
+}>;
 type Method = "get" | "post" | "put" | "patch" | "delete";
 export type DiscordRest = Readonly<Record<Method, (route: string, options?: RestOptions) => Promise<unknown>>>;
 export type DiscordCapability = Readonly<{ environment: Readonly<Record<string, string>>; revoke(): void }>;
-
-const Text = Schema.String.pipe(Schema.minLength(1), Schema.pattern(/^[^\0]+$/));
-const RequestSchema = Schema.Struct({
-  method: Text,
-  route: Text,
-  query: Schema.optional(Schema.Unknown),
-  body: Schema.optional(Schema.Unknown),
-  reason: Schema.optional(Text),
-  files: Schema.optional(Schema.Unknown),
-});
-const FileSchema = Schema.Struct({ name: Text, data: Text, contentType: Schema.optional(Text) });
-const decodeRequest = Schema.decodeUnknownSync(RequestSchema, { onExcessProperty: "error" });
-const decodeFile = Schema.decodeUnknownSync(FileSchema, { onExcessProperty: "error" });
+const methods = new Set<Method>(["get", "post", "put", "patch", "delete"]);
+class RequestError extends Error {}
 
 export class DiscordRpcServer {
   readonly #grants = new Set<string>();
@@ -51,18 +34,13 @@ export class DiscordRpcServer {
   grant(context: DiscordContext): DiscordCapability {
     const token = randomToken();
     this.#grants.add(token);
-    let active = true;
     return Object.freeze({
       environment: Object.freeze({
         AGENT_CONNECTOR_DISCORD_URL: this.#url,
         AGENT_CONNECTOR_DISCORD_TOKEN: token,
         AGENT_CONNECTOR_DISCORD_CONTEXT: JSON.stringify(context),
-        AGENT_CONNECTOR_FRAME_BYTES: String(this.maximumBytes),
       }),
-      revoke: () => {
-        if (active) this.#grants.delete(token);
-        active = false;
-      },
+      revoke: () => this.#grants.delete(token),
     });
   }
   async close(): Promise<void> {
@@ -94,27 +72,31 @@ export class DiscordRpcServer {
       }, this.maximumBytes);
     }
   }
-  async #request(value: unknown): Promise<unknown> {
-    let request: Schema.Schema.Type<typeof RequestSchema>;
-    try {
-      request = decodeRequest(value);
-    } catch {
+  async #request(raw: unknown): Promise<unknown> {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestError("request structure is invalid");
+    const value = raw as Record<string, unknown>;
+    if (Object.keys(value).some((key) => !["method", "route", "query", "body", "reason", "files"].includes(key))) {
       throw new RequestError("request structure is invalid");
     }
-    const method = request.method.toLowerCase() as Method;
-    if (!["get", "post", "put", "patch", "delete"].includes(method)) throw new RequestError("unsupported method");
-    const options: { body?: unknown; query?: URLSearchParams; reason?: string; files?: RestOptions["files"] } = {};
-    if (request.body !== undefined) options.body = request.body;
-    if (request.query !== undefined) options.query = query(request.query);
-    if (request.reason !== undefined) {
-      if (request.reason.length > 512 || /[\r\n]/.test(request.reason)) throw new RequestError("reason is invalid");
-      options.reason = request.reason;
+    const method = typeof value.method === "string" ? value.method.toLowerCase() as Method : undefined;
+    if (!method || !methods.has(method) || typeof value.route !== "string") {
+      throw new RequestError("request structure is invalid");
     }
-    if (request.files !== undefined) options.files = files(request.files);
-    return await this.rest[method](route(request.route), options);
+    const options: { body?: unknown; query?: URLSearchParams; reason?: string; files?: RestOptions["files"] } = {};
+    if (value.body !== undefined) options.body = value.body;
+    if (value.query !== undefined) options.query = query(value.query);
+    if (value.reason !== undefined) {
+      if (
+        typeof value.reason !== "string" || !value.reason || value.reason.length > 512 || /[\r\n\0]/.test(value.reason)
+      ) {
+        throw new RequestError("reason is invalid");
+      }
+      options.reason = value.reason;
+    }
+    if (value.files !== undefined) options.files = files(value.files);
+    return await this.rest[method](route(value.route), options);
   }
 }
-class RequestError extends Error {}
 
 function reply(status: number, value: unknown, maximum: number): Response {
   let bytes = new TextEncoder().encode(JSON.stringify(value));
@@ -128,21 +110,17 @@ function reply(status: number, value: unknown, maximum: number): Response {
   });
 }
 function route(value: string): string {
-  if (!value.startsWith("/") || value.includes("?") || value.includes("#") || value.includes("\\") || control(value)) {
+  if (!value.startsWith("/") || /[?#\\]/.test(value) || control(value)) {
     throw new RequestError("route must be a Discord REST path");
   }
   for (const raw of value.slice(1).split("/")) {
-    if (!raw) throw new RequestError("route escapes the Discord REST path");
     let part: string;
     try {
       part = decodeURIComponent(raw);
     } catch {
       throw new RequestError("route contains invalid encoding");
     }
-    if (
-      [".", ".."].includes(part) || part.includes("/") || part.includes("\\") || part.includes("?") ||
-      part.includes("#") || control(part)
-    ) {
+    if (!raw || part === "." || part === ".." || /[/\\?#]/.test(part) || control(part)) {
       throw new RequestError("route escapes the Discord REST path");
     }
   }
@@ -153,24 +131,32 @@ function control(value: string): boolean {
 }
 function query(value: unknown): URLSearchParams {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestError("query must be an object");
-  const result = new URLSearchParams();
+  const output = new URLSearchParams();
   for (const [name, item] of Object.entries(value)) {
     for (const part of Array.isArray(item) ? item : [item]) {
-      if (!["string", "number", "boolean"].includes(typeof part)) {
-        throw new RequestError(`query.${name} must contain scalar values`);
-      }
-      result.append(name, String(part));
+      if (!["string", "number", "boolean"].includes(typeof part)) throw new RequestError(`query.${name} is invalid`);
+      output.append(name, String(part));
     }
   }
-  return result;
+  return output;
 }
 function files(value: unknown): RestOptions["files"] {
   if (!Array.isArray(value)) throw new RequestError("files must be an array");
-  return value.map((item, index) => {
-    let file: Schema.Schema.Type<typeof FileSchema>;
+  return value.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RequestError(`files[${index}] is invalid`);
+    const file = raw as Record<string, unknown>;
+    if (
+      typeof file.name !== "string" || !file.name || typeof file.data !== "string" ||
+      file.contentType !== undefined && typeof file.contentType !== "string"
+    ) {
+      throw new RequestError(`files[${index}] is invalid`);
+    }
     try {
-      file = decodeFile(item);
-      return { data: Uint8Array.fromBase64(file.data), name: file.name, contentType: file.contentType };
+      return {
+        data: Uint8Array.fromBase64(file.data),
+        name: file.name,
+        contentType: file.contentType as string | undefined,
+      };
     } catch {
       throw new RequestError(`files[${index}] is invalid`);
     }
