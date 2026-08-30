@@ -85,52 +85,18 @@ export async function saveToken(directory: string, token: string): Promise<strin
 export async function readSecret(label: string): Promise<string> {
   if (!Deno.stdin.isTerminal()) throw new Error("secret input requires a terminal");
   await Deno.stdout.write(encoder.encode(`${label}: `));
-  if (Deno.build.os === "windows") {
-    const script = [
-      `$secret=Read-Host`,
-      `$pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)`,
-      `try{[Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)}`,
-    ].join(";");
-    const result = await new Deno.Command("powershell", {
-      args: ["-NoProfile", "-Command", script],
-      stdin: "inherit",
-      stdout: "piped",
-      stderr: "inherit",
-    }).output();
-    if (!result.success) throw new Error("could not read secret input");
-    return decoder.decode(result.stdout).trim();
-  }
-
-  const setting = async (argument: string) => {
-    const status = await new Deno.Command("stty", {
-      args: [argument],
-      stdin: "inherit",
-      stdout: "null",
-      stderr: "inherit",
-    }).output();
-    if (!status.success) throw new Error(`stty ${argument} failed`);
-  };
-
-  await setting("-echo");
-  try {
-    let value = "";
-    const buffer = new Uint8Array(256);
-    while (true) {
-      const length = await Deno.stdin.read(buffer);
-      if (length === null) break;
-      value += decoder.decode(buffer.subarray(0, length), { stream: true });
-      const ending = value.search(/[\r\n]/);
-      if (ending >= 0) {
-        value = value.slice(0, ending);
-        break;
-      }
-    }
-    value += decoder.decode();
-    await Deno.stdout.write(encoder.encode("\n"));
-    return value.trim();
-  } finally {
-    await setting("echo");
-  }
+  const windows = Deno.build.os === "windows";
+  const script = windows
+    ? `$s=Read-Host;$p=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s);try{[Runtime.InteropServices.Marshal]::PtrToStringBSTR($p)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p)}`
+    : `stty -echo; trap 'stty echo' EXIT; IFS= read -r secret; printf '\n%s' "$secret"`;
+  const result = await new Deno.Command(windows ? "powershell" : "sh", {
+    args: windows ? ["-NoProfile", "-Command", script] : ["-c", script],
+    stdin: "inherit",
+    stdout: "piped",
+    stderr: "inherit",
+  }).output();
+  if (!result.success) throw new Error("could not read secret input");
+  return decoder.decode(result.stdout).trim();
 }
 
 export async function validateToken(
@@ -142,13 +108,13 @@ export async function validateToken(
     Authorization: `Bot ${token}`,
     "User-Agent": "AgentConnector/1",
   };
-  const userResponse = await fetch("https://discord.com/api/v10/users/@me", { headers });
-  if (!userResponse.ok) throw new Error(`Discord authentication failed: HTTP ${userResponse.status}`);
-  const user = await userResponse.json();
-
-  const applicationResponse = await fetch("https://discord.com/api/v10/oauth2/applications/@me", { headers });
-  if (!applicationResponse.ok) throw new Error(`Discord application lookup failed: HTTP ${applicationResponse.status}`);
-  const application = await applicationResponse.json();
+  const request = async (path: string) => {
+    const response = await fetch(`https://discord.com/api/v10/${path}`, { headers });
+    if (!response.ok) throw new Error(`Discord ${path} failed: HTTP ${response.status}`);
+    return await response.json();
+  };
+  const user = await request("users/@me");
+  const application = await request("oauth2/applications/@me");
 
   if (expectedBotId && user.id !== expectedBotId) {
     throw new Error(`token belongs to bot ${user.id}, but configuration expects ${expectedBotId}`);
