@@ -12,17 +12,15 @@ allowed by the bot while the invocation is active.
 ## Program
 
 ```lua
+local source = ...
+local document = require("pa.document")(source)
 local json = require("lunajson")
 local endpoint = assert(os.getenv("AGENT_CONNECTOR_DISCORD_URL"), "Discord RPC URL is unavailable")
 local token = assert(os.getenv("AGENT_CONNECTOR_DISCORD_TOKEN"), "Discord RPC token is unavailable")
-local maximum = assert(tonumber(os.getenv("AGENT_CONNECTOR_FRAME_BYTES")), "Discord RPC limit is unavailable")
 local context_source = assert(os.getenv("AGENT_CONNECTOR_DISCORD_CONTEXT"), "Discord context is unavailable")
 local context = json.decode(context_source)
 local origin = assert(endpoint:match("^([%a][%w+.-]*://[^/%?#]+)"), "Discord RPC origin is invalid")
-local http = require("pa.host")({
-    limits = { http_request_bytes = maximum, http_response_bytes = maximum, concurrent_operations = 1 },
-    http = { { origin = origin } },
-}, document.Discord.Guide).http
+local http = require("pa.host")({ http = { { origin = origin } } }, table.concat(document.Discord.Guide, "\n\n")).http
 
 local function request(method, route, options)
     local value = { method = method, route = route }
@@ -49,5 +47,5 @@ local function request(method, route, options)
     return result
 end
 
-return { guide = document.Discord.Guide, context = context, request = request }
+return { guide = table.concat(document.Discord.Guide, "\n\n"), context = context, request = request }
 ```

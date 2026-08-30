@@ -22,7 +22,6 @@ end
     policy: {
       entry: "entry.lua",
       mounts: {},
-      trust: [],
       directory,
       luaMemory: "8MiB",
       processMemory: "64MiB",
@@ -91,24 +90,17 @@ Deno.test("invoke accepts parallel call/result ordering", async () => {
   }
 });
 
-Deno.test("invoke rejects mixed modes and non-response terminal", async () => {
-  const mixed = await fixture(`{
-    { type = "reasoning", text = "x" },
-    { type = "reasoning_complete", result = 2 },
-    { type = "response", text = "y" },
-    { type = "response_complete" },
+Deno.test("invoke requires one final terminal event", async () => {
+  const missing = await fixture(`{{ type = "response", text = "x" }}`);
+  const following = await fixture(`{
     { type = "done", durable = false },
-  }`);
-  const early = await fixture(`{
-    { type = "reasoning", text = "x" },
-    { type = "reasoning_complete", result = 2 },
-    { type = "store", result = 2, start = 1 },
+    { type = "response", text = "x" },
   }`);
   try {
-    await assertRejects(() => collect(mixed.policy));
-    await assertRejects(() => collect(early.policy));
+    await assertRejects(() => collect(missing.policy));
+    await assertRejects(() => collect(following.policy));
   } finally {
-    await mixed.cleanup();
-    await early.cleanup();
+    await missing.cleanup();
+    await following.cleanup();
   }
 });

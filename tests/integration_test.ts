@@ -30,7 +30,6 @@ end
       target: { directory: root },
       entry: "entry.lua",
       mounts: { discord },
-      trust: ["discord"],
     };
     const values = await Effect.runPromise(Stream.runCollect(run(agent, "", {
       executable: agentExecutable(),

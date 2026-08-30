@@ -19,7 +19,6 @@ policies:
     directory: "${directory.replaceAll("\\", "\\\\")}"
     entry: zinc.md
     mounts: {}
-    trusted_modules: []
     lua_memory: 64MiB
     process_memory: 256MiB
     wall_time: 30s

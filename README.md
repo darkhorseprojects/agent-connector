@@ -22,10 +22,6 @@ policies:
     directory: "/absolute/path/to/zinc"
     entry: "zinc.md"
     mounts: {}
-    trusted_modules:
-      - "src.models"
-      - "src.store"
-      - "src.cygnet"
     lua_memory: "96MiB"
     process_memory: "512MiB"
     wall_time: "2m"
@@ -37,8 +33,9 @@ guilds: {}
 Route-map keys are Discord IDs and values are policy names. User routes handle direct messages. Channel routes handle
 messages in that channel and its threads. Guild routes require a bot mention.
 
-Connector automatically mounts its bundled root `discord.md` as `discord` and trusts that exact source. Policies must
-not define a conflicting `discord` mount.
+Connector automatically mounts its bundled root `discord.md` as the public `discord` module. Package initialization is
+trusted, while generated code receives only sealed public modules. Policies must not define a conflicting `discord`
+mount.
 
 ## Connect and run
 

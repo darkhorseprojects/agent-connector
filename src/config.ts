@@ -6,7 +6,6 @@ export type Policy = Readonly<{
   directory: string;
   entry: string;
   mounts: Readonly<Record<string, string>>;
-  trust: readonly string[];
   luaMemory: string;
   processMemory: string;
   wallTime: string;
@@ -42,7 +41,6 @@ const PolicySource = Schema.Struct({
   directory: Text,
   entry: Text,
   mounts: Mapping,
-  trusted_modules: Schema.Array(Text),
   lua_memory: Text,
   process_memory: Text,
   wall_time: Text,
@@ -64,15 +62,10 @@ export function parseConfig(source: string): ConnectorConfig {
       if (!moduleName.test(module) || module === "discord") throw new TypeError(`policy '${name}' mount is invalid`);
       mounts[module] = sourcePath(path, `policy '${name}' mounts.${module}`, true);
     }
-    const trust = input.trusted_modules.map((module) => {
-      if (!moduleName.test(module) || module === "discord") throw new TypeError(`policy '${name}' trust is invalid`);
-      return module;
-    });
     policies[name] = Object.freeze({
       directory: input.directory,
       entry: sourcePath(input.entry, `policy '${name}' entry`, false),
       mounts: Object.freeze(mounts),
-      trust: Object.freeze(trust),
       luaMemory: input.lua_memory,
       processMemory: input.process_memory,
       wallTime: input.wall_time,
