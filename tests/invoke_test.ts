@@ -24,8 +24,6 @@ end
       mounts: {},
       directory,
       luaMemory: "8MiB",
-      processMemory: "64MiB",
-      wallTime: "10s",
     },
     cleanup: () => Deno.remove(directory, { recursive: true }),
   };

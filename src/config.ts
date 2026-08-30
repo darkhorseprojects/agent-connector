@@ -7,8 +7,6 @@ export type Policy = Readonly<{
   entry: string;
   mounts: Readonly<Record<string, string>>;
   luaMemory: string;
-  processMemory: string;
-  wallTime: string;
 }>;
 export type ConnectorConfig = Readonly<{
   version: 1;
@@ -42,8 +40,6 @@ const PolicySource = Schema.Struct({
   entry: Text,
   mounts: Mapping,
   lua_memory: Text,
-  process_memory: Text,
-  wall_time: Text,
 });
 const decodeRoot = Schema.decodeUnknownSync(Root, { onExcessProperty: "error" });
 const decodePolicy = Schema.decodeUnknownSync(PolicySource, { onExcessProperty: "error" });
@@ -67,8 +63,6 @@ export function parseConfig(source: string): ConnectorConfig {
       entry: sourcePath(input.entry, `policy '${name}' entry`, false),
       mounts: Object.freeze(mounts),
       luaMemory: input.lua_memory,
-      processMemory: input.process_memory,
-      wallTime: input.wall_time,
     });
   }
   const routes = (input: Record<string, unknown>, field: string) =>

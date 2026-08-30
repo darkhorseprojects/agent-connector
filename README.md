@@ -1,7 +1,7 @@
 # Agent Connector
 
 Agent Connector routes Discord conversations to Portable Agents policies. Each turn runs in a disposable PA process with
-explicit memory and wall-time limits.
+a configured Lua allocator; its service manager owns process limits and deadlines.
 
 ## Configure
 
@@ -23,8 +23,6 @@ policies:
     entry: "zinc.md"
     mounts: {}
     lua_memory: "96MiB"
-    process_memory: "512MiB"
-    wall_time: "2m"
 users: {}
 channels: {}
 guilds: {}

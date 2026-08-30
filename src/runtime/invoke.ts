@@ -33,7 +33,7 @@ function discordSource(): string {
 }
 function agent(policy: Policy): Agent {
   return {
-    target: { directory: policy.directory },
+    directory: policy.directory,
     entry: policy.entry,
     mounts: { ...policy.mounts, discord: discordSource() },
   };
@@ -44,7 +44,7 @@ function invocation(policy: Policy, frameBytes?: number, environment?: Readonly<
     cwd: policy.directory,
     environment,
     frameBytes,
-    limits: { luaMemory: policy.luaMemory, processMemory: policy.processMemory, wallTime: policy.wallTime },
+    luaMemory: policy.luaMemory,
   };
 }
 export function checkAgent(policy: Policy): Effect.Effect<unknown, AgentError> {

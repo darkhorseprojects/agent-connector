@@ -20,8 +20,6 @@ policies:
     entry: zinc.md
     mounts: {}
     lua_memory: 64MiB
-    process_memory: 256MiB
-    wall_time: 30s
 users: { "${user}": zinc }
 channels: { "${channel}": zinc }
 guilds: { "${guild}": zinc }

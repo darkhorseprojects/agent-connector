@@ -27,14 +27,14 @@ end
     });
     const discord = fromFileUrl(new URL("../discord.md", import.meta.url));
     const agent: Agent = {
-      target: { directory: root },
+      directory: root,
       entry: "entry.lua",
       mounts: { discord },
     };
     const values = await Effect.runPromise(Stream.runCollect(run(agent, "", {
       executable: agentExecutable(),
       environment: capability.environment,
-      limits: { luaMemory: "16MiB", processMemory: "96MiB", wallTime: "10s" },
+      luaMemory: "16MiB",
     })));
     assertEquals(Chunk.toReadonlyArray(values), ["actor-42"]);
     capability.revoke();
