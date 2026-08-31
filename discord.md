@@ -12,8 +12,7 @@ allowed by the bot while the invocation is active.
 ## Program
 
 ```lua
-local source = ...
-local document = require("pa.document")(source)
+local document = require("pa.markdown")()
 local json = require("lunajson")
 local endpoint = assert(os.getenv("AGENT_CONNECTOR_DISCORD_URL"), "Discord RPC URL is unavailable")
 local token = assert(os.getenv("AGENT_CONNECTOR_DISCORD_TOKEN"), "Discord RPC token is unavailable")
@@ -33,12 +32,8 @@ local function request(method, route, options)
     })
     local chunks, response, event = {}, nil, iterator()
     while event do
-        if type(event) == "function" then
-            event = iterator(coroutine.yield(event))
-        else
-            if event.type == "data" then chunks[#chunks + 1] = event.data else response = event end
-            event = iterator()
-        end
+        if event.type == "data" then chunks[#chunks + 1] = event.data else response = event end
+        event = iterator()
     end
     local result = json.decode(table.concat(chunks))
     if not response or response.status < 200 or response.status >= 300 then

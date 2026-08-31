@@ -1,5 +1,5 @@
 import { Client, Events, GatewayIntentBits, type Message, Partials, type TextBasedChannel } from "discord.js";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Fiber, Semaphore, Stream } from "effect";
 import type { ConnectorConfig } from "./config.ts";
 import { type DiscordRest, DiscordRpcServer } from "./discord/rpc.ts";
 import { deriveThreadTitle } from "./discord/format.ts";
@@ -9,36 +9,40 @@ import { runAgent } from "./runtime/invoke.ts";
 
 export class SchedulerCapacityError extends Error {}
 class Scheduler {
-  readonly #semaphore: Effect.Semaphore;
-  readonly #actors = new Map<string, Fiber.RuntimeFiber<void, never>>();
+  readonly #semaphore: Semaphore.Semaphore;
+  readonly #actors = new Map<string, Fiber.Fiber<void, never>>();
   #closed = false;
 
   constructor(concurrency: number, readonly maximum: number) {
-    this.#semaphore = Effect.unsafeMakeSemaphore(concurrency);
+    this.#semaphore = Semaphore.makeUnsafe(concurrency);
   }
   submit(actor: string, task: Effect.Effect<void, never>): Effect.Effect<void, SchedulerCapacityError> {
-    return Effect.gen(this, function* () {
-      if (this.#closed) return;
-      const previous = this.#actors.get(actor);
+    // deno-lint-ignore no-this-alias
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.#closed) return;
+      const previous = self.#actors.get(actor);
       if (previous) yield* Fiber.interrupt(previous);
-      else if (this.#actors.size >= this.maximum) {
+      else if (self.#actors.size >= self.maximum) {
         return yield* Effect.fail(new SchedulerCapacityError("request queue is full"));
       }
       // deno-lint-ignore prefer-const
-      let fiber!: Fiber.RuntimeFiber<void, never>;
+      let fiber!: Fiber.Fiber<void, never>;
       fiber = Effect.runFork(
-        this.#semaphore.withPermits(1)(task).pipe(Effect.ensuring(Effect.sync(() => {
-          if (this.#actors.get(actor) === fiber) this.#actors.delete(actor);
+        self.#semaphore.withPermits(1)(task).pipe(Effect.ensuring(Effect.sync(() => {
+          if (self.#actors.get(actor) === fiber) self.#actors.delete(actor);
         }))),
       );
-      this.#actors.set(actor, fiber);
+      self.#actors.set(actor, fiber);
     });
   }
   close(): Effect.Effect<void> {
-    return Effect.gen(this, function* () {
-      this.#closed = true;
-      yield* Fiber.interruptAll([...this.#actors.values()]);
-      this.#actors.clear();
+    // deno-lint-ignore no-this-alias
+    const self = this;
+    return Effect.gen(function* () {
+      self.#closed = true;
+      yield* Fiber.interruptAll([...self.#actors.values()]);
+      self.#actors.clear();
     });
   }
 }
@@ -94,11 +98,13 @@ export class DiscordConnector {
     );
   }
   stop(): Promise<void> {
-    return this.#stopping ??= Effect.runPromise(Effect.gen(this, function* () {
-      yield* this.#scheduler.close();
-      if (this.#rpc) yield* attempt(() => this.#rpc!.close()).pipe(Effect.orElseSucceed(() => undefined));
-      this.#rpc = undefined;
-      this.#client.destroy();
+    // deno-lint-ignore no-this-alias
+    const self = this;
+    return this.#stopping ??= Effect.runPromise(Effect.gen(function* () {
+      yield* self.#scheduler.close();
+      if (self.#rpc) yield* attempt(() => self.#rpc!.close()).pipe(Effect.orElseSucceed(() => undefined));
+      self.#rpc = undefined;
+      self.#client.destroy();
     }));
   }
   #receive(message: Message): Effect.Effect<void, unknown> {
@@ -114,7 +120,9 @@ export class DiscordConnector {
       mentionedBot: message.mentions.users.has(this.options.config.discord.bot),
     });
     if (!request || this.options.signal.aborted) return Effect.void;
-    const task = Effect.gen(this, function* () {
+    // deno-lint-ignore no-this-alias
+    const self = this;
+    const task = Effect.gen(function* () {
       let target: TextBasedChannel = channel;
       if (request.createThread) {
         if (!message.inGuild() || !message.channel.isSendable()) {
@@ -129,7 +137,7 @@ export class DiscordConnector {
         );
       }
       if (!target.isSendable()) return yield* Effect.fail(new Error("Discord target is not sendable"));
-      const rpc = this.#rpc;
+      const rpc = self.#rpc;
       if (!rpc) return yield* Effect.fail(new Error("Discord RPC is unavailable"));
       const grant = yield* Effect.acquireRelease(
         Effect.sync(() =>
@@ -146,14 +154,14 @@ export class DiscordConnector {
         (grant) => Effect.sync(() => grant.revoke()),
       );
       const renderer = new DiscordRenderer(target as RenderTarget, {
-        outputMessages: this.options.config.limits.outputMessages,
+        outputMessages: self.options.config.limits.outputMessages,
       });
       yield* Stream.runForEach(
         runAgent(
-          this.options.config.policies[request.policy],
+          self.options.config.policies[request.policy],
           request.actor,
           request.input,
-          this.options.config.limits.frameBytes,
+          self.options.config.limits.frameBytes,
           grant.environment,
         ),
         (event) => attempt(() => renderer.push(event)),
@@ -161,20 +169,23 @@ export class DiscordConnector {
       yield* attempt(() => renderer.finish());
     }).pipe(
       Effect.scoped,
-      Effect.catchAll((error) =>
-        attempt(() => reportIncident(channel, error)).pipe(Effect.orElseSucceed(() => undefined))
-      ),
+      Effect.matchEffect({
+        onFailure: (error) => attempt(() => reportIncident(channel, error)).pipe(Effect.orElseSucceed(() => undefined)),
+        onSuccess: () => Effect.void,
+      }),
     );
     return this.#scheduler.submit(request.actor, task).pipe(
-      Effect.catchAll(() =>
-        channel.isSendable()
-          ? attempt(() =>
-            channel.send({ content: "Agent queue is full. Try again later.", allowedMentions: { parse: [] } }).then(
-              () => {},
-            )
-          ).pipe(Effect.asVoid)
-          : Effect.void
-      ),
+      Effect.matchEffect({
+        onFailure: () =>
+          channel.isSendable()
+            ? attempt(() =>
+              channel.send({ content: "Agent queue is full. Try again later.", allowedMentions: { parse: [] } }).then(
+                () => {},
+              )
+            ).pipe(Effect.asVoid)
+            : Effect.void,
+        onSuccess: () => Effect.void,
+      }),
     );
   }
 }

@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { type Agent, run } from "@darkhorseprojects/portable-agents";
 import { fromFileUrl, join } from "@std/path";
-import { Chunk, Effect, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import { type DiscordRest, DiscordRpcServer } from "../src/discord/rpc.ts";
 import { agentExecutable } from "../src/runtime/invoke.ts";
 
@@ -36,7 +36,7 @@ end
       environment: capability.environment,
       luaMemory: "16MiB",
     })));
-    assertEquals(Chunk.toReadonlyArray(values), ["actor-42"]);
+    assertEquals(values, ["actor-42"]);
     capability.revoke();
   } finally {
     await rpc.close();

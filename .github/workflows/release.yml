@@ -23,6 +23,7 @@ jobs:
           - { os: macos-13, id: macos-x86_64 }
           - { os: macos-14, id: macos-aarch64 }
           - { os: windows-latest, id: windows-x86_64 }
+          - { os: windows-11-arm, id: windows-aarch64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:

@@ -3,11 +3,11 @@ import { dirname, fromFileUrl, join } from "@std/path";
 import { Effect, Schema, Stream } from "effect";
 import type { Policy } from "../config.ts";
 
-const Text = Schema.String.pipe(Schema.pattern(/^[^\0]+$/));
-const AnyText = Schema.String.pipe(Schema.pattern(/^[^\0]*$/));
-const Id = Schema.Number.pipe(Schema.int(), Schema.positive());
+const Text = Schema.String.check(Schema.isPattern(/^[^\0]+$/));
+const AnyText = Schema.String.check(Schema.isPattern(/^[^\0]*$/));
+const Id = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
 const Result = { result: Schema.optional(Id) };
-const Event = Schema.Union(
+const Event = Schema.Union([
   Schema.Struct({ type: Schema.Literal("reasoning"), text: Text }),
   Schema.Struct({ type: Schema.Literal("reasoning_complete"), ...Result }),
   Schema.Struct({ type: Schema.Literal("response"), text: Text }),
@@ -16,7 +16,7 @@ const Event = Schema.Union(
   Schema.Struct({ type: Schema.Literal("tool_result"), call: Text, text: AnyText, ok: Schema.Boolean, ...Result }),
   Schema.Struct({ type: Schema.Literal("store"), result: Id, start: Id }),
   Schema.Struct({ type: Schema.Literal("done"), durable: Schema.Literal(false) }),
-);
+]);
 export type AgentEvent = Schema.Schema.Type<typeof Event>;
 const decode = Schema.decodeUnknownSync(Event, { onExcessProperty: "error" });
 
@@ -74,7 +74,7 @@ export function runAgent(
   );
   return Stream.concat(
     validated,
-    Stream.execute(Effect.sync(() => {
+    Stream.fromEffectDrain(Effect.sync(() => {
       if (!terminal) throw new Error("agent output has no terminal event");
     })),
   );

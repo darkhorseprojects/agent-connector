@@ -1,4 +1,4 @@
-import { Chunk, Effect, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import type { Policy } from "../src/config.ts";
 import { runAgent } from "../src/runtime/invoke.ts";
 import { assertEquals, assertRejects } from "@std/assert";
@@ -36,9 +36,7 @@ async function collect(policy: Policy) {
     AGENT_CONNECTOR_DISCORD_CONTEXT: "{}",
     AGENT_CONNECTOR_FRAME_BYTES: "4096",
   };
-  return Chunk.toReadonlyArray(
-    await Effect.runPromise(Stream.runCollect(runAgent(policy, "actor", "request", 4096, environment))),
-  );
+  return await Effect.runPromise(Stream.runCollect(runAgent(policy, "actor", "request", 4096, environment)));
 }
 
 Deno.test("invoke accepts durable Store and temporary Done", async () => {

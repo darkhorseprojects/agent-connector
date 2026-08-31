@@ -54,6 +54,8 @@ message. Completed durable Zinc records remain available to the new turn. Intent
 incident message.
 
 Different actors run concurrently up to `concurrency`. `pending_requests` limits distinct active and waiting actors.
+Each turn starts a fresh package generation, so edits made while Connector runs apply to the next turn without mutating
+or replaying an active turn.
 
 ## Output
 

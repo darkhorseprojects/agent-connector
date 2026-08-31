@@ -21,10 +21,10 @@ export type ConnectorConfig = Readonly<{
 
 const snowflake = /^\d{17,20}$/;
 const moduleName = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
-const Text = Schema.String.pipe(Schema.minLength(1), Schema.pattern(/^[^\0]+$/));
-const Snowflake = Text.pipe(Schema.pattern(snowflake));
-const Positive = Schema.Number.pipe(Schema.int(), Schema.positive());
-const Mapping = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const Text = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/^[^\0]+$/));
+const Snowflake = Text.check(Schema.isPattern(snowflake));
+const Positive = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
+const Mapping = Schema.Record(Schema.String, Schema.Unknown);
 const Root = Schema.Struct({
   version: Schema.Literal(1),
   discord: Schema.Struct({ application: Snowflake, bot: Snowflake }),
