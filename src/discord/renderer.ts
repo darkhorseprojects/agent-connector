@@ -1,188 +1,128 @@
-import type { AgentEvent } from "../runtime/invoke.ts";
-import { DiscordMessageStream, splitDiscordMessage } from "./format.ts";
+import type { AgentEvent } from "../agent.ts";
+import { DiscordMessageStream } from "./format.ts";
 
 const LIMIT = 2000;
 const UPDATE_INTERVAL = 400;
 const FOOTER_RESERVE = "\n-# result # · start #".length + String(Number.MAX_SAFE_INTEGER).length * 2;
-const sendOptions = (content: string) => ({ content, allowedMentions: { parse: [] as never[] } });
+const options = (content: string) => ({ content, allowedMentions: { parse: [] as never[] } });
 
 export type RenderedMessage = Readonly<{
   edit(options: { content: string; allowedMentions: { parse: never[] } }): Promise<unknown>;
 }>;
-
 export type RenderTarget = Readonly<{
   send(options: { content: string; allowedMentions: { parse: never[] } }): Promise<RenderedMessage>;
 }>;
-
+type Sent = { message: RenderedMessage; content: string };
 type Block = {
   kind: "reasoning" | "response" | "fixed";
   stream: DiscordMessageStream;
-  messages: RenderedMessage[];
-  contents: string[];
-  lastMutation: number;
-  quoteAtLineStart: boolean;
-  quoted: boolean;
+  sent: Sent[];
+  mutation: number;
+  lineStart: boolean;
 };
 
 export class DiscordRenderer {
-  readonly #target: RenderTarget;
-  readonly #maximumOutputMessages: number;
-  #sentMessages = 0;
+  #sent = 0;
   #current: Block | undefined;
-  #last: Block | undefined;
+  #last: Sent | undefined;
   #terminal: Extract<AgentEvent, { type: "store" | "done" }> | undefined;
-  #pending: Promise<void> = Promise.resolve();
-  #finished: Promise<void> | undefined;
 
-  constructor(target: RenderTarget, limits: Readonly<{ outputMessages: number }>) {
-    if (!Number.isSafeInteger(limits.outputMessages) || limits.outputMessages <= 0) {
-      throw new RangeError("outputMessages must be positive");
-    }
-    this.#target = target;
-    this.#maximumOutputMessages = limits.outputMessages;
-  }
-
-  push(event: AgentEvent): Promise<void> {
-    return this.#pending = this.#pending.then(() => this.#push(event));
-  }
-
-  async #push(event: AgentEvent): Promise<void> {
-    if (this.#terminal) throw new Error("renderer received output after terminal event");
+  constructor(readonly target: RenderTarget, readonly limits: Readonly<{ outputMessages: number }>) {}
+  async push(event: AgentEvent): Promise<void> {
     if (event.type === "store" || event.type === "done") {
-      await this.#flushCurrent();
+      await this.#flush();
       this.#terminal = event;
       this.#current = undefined;
-      return;
-    }
-    if (event.type === "reasoning" || event.type === "response") {
+    } else if (event.type === "reasoning" || event.type === "response") {
       if (this.#current?.kind !== event.type) {
-        await this.#flushCurrent();
-        this.#current = this.#block(event.type);
+        await this.#flush();
+        this.#current = block(event.type);
       }
       this.#append(this.#current, event.text);
-      await this.#render(this.#current, this.#current.messages.length === 0);
-      return;
-    }
-    if (event.type === "reasoning_complete" || event.type === "response_complete") {
-      await this.#flushCurrent();
-      this.#last = this.#current;
+      await this.#render(this.#current, this.#current.sent.length === 0);
+    } else if (event.type === "reasoning_complete" || event.type === "response_complete") {
+      await this.#flush();
       this.#current = undefined;
-      return;
+    } else {
+      await this.#flush();
+      this.#current = undefined;
+      const language = event.type === "tool_call" ? "lua" : "text";
+      const value = (event.type === "tool_call" ? event.code : event.text).replaceAll("```", "``\u200b`");
+      const fixed = block("fixed");
+      fixed.stream.append(`\`\`\`${language}\n${value}\n\`\`\``);
+      this.#check(fixed);
+      await this.#render(fixed, true);
+      this.#last = fixed.sent.at(-1);
     }
-
-    await this.#flushCurrent();
-    this.#current = undefined;
-    const language = event.type === "tool_call" ? "lua" : "text";
-    const raw = event.type === "tool_call" ? event.code : event.text;
-    const value = raw.replaceAll("```", "``\u200b`");
-    const block = this.#block("fixed");
-    block.stream.append(`\`\`\`${language}\n${value}\n\`\`\``);
-    this.#checkMessages(block);
-    await this.#render(block, true);
-    this.#last = block;
   }
-
-  get terminal(): boolean {
-    return this.#terminal !== undefined;
-  }
-
-  finish(): Promise<void> {
-    return this.#finished ??= this.#pending.then(() => this.#complete());
-  }
-
-  async #complete(): Promise<void> {
-    if (!this.#terminal) throw new Error("renderer received no terminal event");
-    if (this.#terminal.type === "done") return;
-    const footer = this.#footer(this.#terminal);
-    const last = this.#last?.messages.length ? this.#last : undefined;
-    if (last) {
-      const index = last.messages.length - 1;
-      const content = `${last.contents[index]}\n${footer}`;
-      if (content.length <= LIMIT) {
-        await last.messages[index].edit(sendOptions(content));
-        last.contents[index] = content;
-        return;
-      }
-    }
-    for (const chunk of splitDiscordMessage(footer, LIMIT)) await this.#send(chunk);
-  }
-
-  #block(kind: Block["kind"]): Block {
-    const block: Block = {
-      kind,
-      stream: new DiscordMessageStream(LIMIT),
-      messages: [],
-      contents: [],
-      lastMutation: Number.NEGATIVE_INFINITY,
-      quoteAtLineStart: true,
-      quoted: false,
-    };
-    return block;
-  }
-
   #append(block: Block, value: string): void {
-    if (block.kind !== "reasoning") {
-      block.stream.append(value);
-      this.#checkMessages(block);
-      return;
+    if (block.kind !== "reasoning") block.stream.append(value);
+    else {
+      const lines = value.split("\n");
+      const trailing = lines.at(-1) === "";
+      if (trailing) lines.pop();
+      block.stream.append(
+        lines.map((line, index) => index === 0 && !block.lineStart ? line : line ? `> ${line}` : ">").join("\n") +
+          (trailing ? "\n" : ""),
+      );
+      block.lineStart = trailing;
     }
-    let rendered = "";
-    for (const character of value) {
-      if (block.quoteAtLineStart) {
-        rendered += character === "\n" ? ">" : "> ";
-        block.quoteAtLineStart = character === "\n";
-      }
-      rendered += character;
-      block.quoted = true;
-      if (character === "\n") block.quoteAtLineStart = true;
-    }
-    block.stream.append(rendered);
-    this.#checkMessages(block);
+    this.#check(block);
   }
-
-  async #flushCurrent(): Promise<void> {
-    if (!this.#current) return;
-    if (this.#current.kind === "reasoning" && this.#current.quoted && this.#current.quoteAtLineStart) {
-      this.#current.stream.append(">");
-      this.#current.quoteAtLineStart = false;
-      this.#checkMessages(this.#current);
+  async #flush(): Promise<void> {
+    const block = this.#current;
+    if (!block) return;
+    if (block.kind === "reasoning" && block.lineStart) {
+      block.stream.append(">");
+      block.lineStart = false;
+      this.#check(block);
     }
-    await this.#render(this.#current, true);
+    await this.#render(block, true);
+    this.#last = block.sent.at(-1);
   }
-
   async #render(block: Block, force: boolean): Promise<void> {
     const now = performance.now();
-    if (!force && now - block.lastMutation < UPDATE_INTERVAL) return;
+    if (!force && now - block.mutation < UPDATE_INTERVAL) return;
     const chunks = block.stream.snapshot();
     for (let index = 0; index < chunks.length; index++) {
-      if (block.contents[index] === chunks[index]) continue;
-      if (block.messages[index]) await block.messages[index].edit(sendOptions(chunks[index]));
-      else block.messages[index] = await this.#send(chunks[index]);
-      block.contents[index] = chunks[index];
+      const sent = block.sent[index];
+      if (sent?.content === chunks[index]) continue;
+      if (sent) {
+        await sent.message.edit(options(chunks[index]));
+        sent.content = chunks[index];
+      } else block.sent[index] = { message: await this.#send(chunks[index]), content: chunks[index] };
     }
-    block.lastMutation = now;
+    block.mutation = now;
   }
-
-  #checkMessages(block: Block): void {
-    const projected = this.#sentMessages + block.stream.messageCount - block.messages.length;
-    const last = block.stream.snapshot().at(-1);
+  #check(block: Block): void {
+    const projected = this.#sent + block.stream.messageCount - block.sent.length;
     if (
-      projected > this.#maximumOutputMessages ||
-      projected === this.#maximumOutputMessages && last && last.length > LIMIT - FOOTER_RESERVE
-    ) {
-      throw new Error("agent output exceeds configured message limit");
-    }
+      projected > this.limits.outputMessages ||
+      projected === this.limits.outputMessages && block.stream.lastLength > LIMIT - FOOTER_RESERVE
+    ) throw new Error("agent output exceeds configured message limit");
   }
-
   async #send(content: string): Promise<RenderedMessage> {
-    if (this.#sentMessages >= this.#maximumOutputMessages) {
-      throw new Error("agent output exceeds configured message limit");
-    }
-    this.#sentMessages++;
-    return await this.#target.send(sendOptions(content));
+    if (this.#sent >= this.limits.outputMessages) throw new Error("agent output exceeds configured message limit");
+    this.#sent++;
+    return await this.target.send(options(content));
   }
+  async finish(): Promise<void> {
+    const terminal = this.#terminal!;
+    if (terminal.type === "done") return;
+    const footer = `-# result #${terminal.result} · start #${terminal.start}`;
+    if (this.#last && this.#last.content.length + footer.length + 1 <= LIMIT) {
+      this.#last.content += `\n${footer}`;
+      await this.#last.message.edit(options(this.#last.content));
+    } else await this.#send(footer);
+  }
+}
 
-  #footer(store: Extract<AgentEvent, { type: "store" }>): string {
-    return `-# result #${store.result} · start #${store.start}`;
-  }
+function block(kind: Block["kind"]): Block {
+  return {
+    kind,
+    stream: new DiscordMessageStream(LIMIT),
+    sent: [],
+    mutation: Number.NEGATIVE_INFINITY,
+    lineStart: true,
+  };
 }

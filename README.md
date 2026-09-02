@@ -1,41 +1,29 @@
 # Agent Connector
 
-Agent Connector routes Discord conversations to Portable Agents policies. Each turn runs in a disposable PA process with
-a configured Lua allocator; its service manager owns process limits and deadlines.
+Agent Connector routes Discord conversations to Portable Agents policies. Each request runs in a disposable Agent process with bounded JSONL
+transport. The service manager owns outer process and wall-time policy.
 
 ## Configure
 
-Create `agent-connector.yaml`:
+Create `agent-connector.json`:
 
-```yaml
-version: 1
-discord:
-  application: "<discord-application-id>"
-  bot: "<discord-bot-id>"
-concurrency: 4
-limits:
-  pending_requests: 32
-  frame_bytes: 1048576
-  output_messages: 32
-policies:
-  zinc:
-    directory: "/absolute/path/to/zinc"
-    entry: "zinc.md"
-    mounts: {}
-    lua_memory: "96MiB"
-users: {}
-channels: {}
-guilds: {}
+```json
+{
+  "version": 1,
+  "discord": { "application": "<discord-application-id>", "bot": "<discord-bot-id>" },
+  "concurrency": 4,
+  "limits": { "pendingRequests": 32, "frameBytes": 1048576, "outputMessages": 32 },
+  "policies": {
+    "zinc": { "directory": "/absolute/path/to/zinc", "entry": "zinc.md", "mounts": {}, "luaMemory": "96MiB" }
+  },
+  "users": {},
+  "channels": {},
+  "guilds": {}
+}
 ```
 
-Route-map keys are Discord IDs and values are policy names. User routes handle direct messages. Channel routes handle
-messages in that channel and its threads. Guild routes require a bot mention.
-
-Connector automatically mounts its bundled root `discord.md` as the public `discord` module. Package initialization is
-trusted, while generated code receives only sealed public modules. Policies must not define a conflicting `discord`
-mount.
-
-## Connect and run
+Configuration is strict JSON. Unknown fields fail. Policy directories are absolute; entries and configured mounts are safe relative source
+paths. Route-map keys are Discord IDs and values are policy names.
 
 ```sh
 agc connect /path/to/config-directory
@@ -43,50 +31,33 @@ agc check /path/to/config-directory
 agc run /path/to/config-directory
 ```
 
-`connect` requires the YAML file, securely reads a bot token, verifies the configured application and bot, stores the
-token in the platform account-data directory, and prints an invite URL. Tokens never enter YAML.
+`connect` reads the token directly from the terminal with echo disabled, verifies its bot and application, and writes it atomically to the
+platform credential directory. The token never enters configuration or process arguments.
 
-## Conversations
+## Scheduling
 
-An actor is one Discord user under one application and policy. If that actor sends another message while a turn is
-running or waiting, Connector interrupts the older PA process, revokes its Discord grant, and starts only the newest
-message. Completed durable Zinc records remain available to the new turn. Intentional supersession does not produce an
-incident message.
-
-Different actors run concurrently up to `concurrency`. `pending_requests` limits distinct active and waiting actors.
-Each turn starts a fresh package generation, so edits made while Connector runs apply to the next turn without mutating
-or replaying an active turn.
-
-## Output
-
-Connector renders events as they arrive:
-
-- reasoning as `>` blockquotes;
-- tool calls as `lua` code blocks;
-- tool results as `text` code blocks;
-- responses as normal Discord Markdown.
-
-Streaming text is edited at a bounded interval. Message splitting preserves Markdown fences. Durable Store completion
-adds a compact result footer; temporary Done completion adds none.
+An actor is one Discord user under one application and policy. A newer request interrupts that actor's previous Agent process. Different
+actors run up to `concurrency`; `pendingRequests` limits distinct running and waiting actors. Grants, renderer state, child processes, and
+fibers are scoped and cleaned during interruption and shutdown.
 
 ## Discord capability
 
-Generated Lua can call:
+Connector mounts `discord.md` as `discord`. The capability accepts tagged operations:
 
 ```lua
 local discord = require("discord")
-return discord.request("POST", "/channels/" .. discord.context.channelId .. "/messages", {
-    body = { content = "hello" },
-})
+return discord.request({ type = "createMessage", content = "hello" })
 ```
 
-The grant is random, loopback-only, bounded, and revoked when the invocation ends. While active it can use any Discord
-REST route permitted to the bot. Context guidance is not a resource-level permission boundary.
+Connector constructs every Discord route from the immutable grant context. Reads stay in the granted channel. Edit and delete apply only to
+messages created by the same grant. Reactions apply to the triggering message or grant-created messages. Request, response, frame,
+attachment, and output-message limits are enforced. Revocation removes the random loopback bearer token.
 
-## Distribution
+## Output
 
-A release contains `agc`, the matching `agent` launcher, root `discord.md`, PA's flattened `.lux/runtime`, service
-examples, licenses, and notices.
+Reasoning is rendered as blockquotes, tool calls and results as fenced code, and responses as Discord Markdown. The Agent stream drives
+updates sequentially and throttles edits. Splitting preserves Unicode pairs and Markdown fence state. Durable completion adds a result
+footer; temporary completion does not.
 
 ```sh
 deno task check

@@ -1,42 +1,41 @@
+type Fence = Readonly<{ marker: string; info: string }>;
+type Chunk = Readonly<{ content: string; open: Fence | null; remaining?: string }>;
+
 export class DiscordMessageStream {
-  readonly #maximum: number;
   readonly #finalized: string[] = [];
   #tail = "";
-  #openFence: Fence | null = null;
+  #open: Fence | null = null;
+  #snapshot: string[] | undefined;
 
-  constructor(maximum = 2000) {
-    validateMaximum(maximum);
-    this.#maximum = maximum;
+  constructor(readonly maximum = 2000) {
+    validate(maximum);
   }
-
   append(text: string): void {
+    this.#snapshot = undefined;
     this.#tail += text;
-    while (this.#tail.trim().length) {
-      const part = takeChunk(this.#tail, this.#maximum, this.#openFence);
-      if (part.remaining === undefined) break;
-      this.#finalized.push(part.content);
-      this.#tail = part.remaining;
-      this.#openFence = part.open;
+    while (this.#tail.trim()) {
+      const chunk = take(this.#tail, this.maximum, this.#open);
+      if (chunk.remaining === undefined) break;
+      this.#finalized.push(chunk.content);
+      this.#tail = chunk.remaining;
+      this.#open = chunk.open;
     }
   }
-
   get messageCount(): number {
-    return this.#finalized.length + (this.#tail.trim().length ? 1 : 0);
+    return this.#finalized.length + Number(Boolean(this.#tail.trim()));
   }
-
+  get lastLength(): number {
+    return this.snapshot().at(-1)?.length ?? 0;
+  }
   snapshot(): string[] {
-    const tail = this.#tail.trim();
-    if (!tail) return [...this.#finalized];
-    const rendered = renderChunk(tail, this.#openFence).content;
-    if (rendered.length > this.#maximum) throw new Error("Discord chunk exceeds maximum");
-    return [...this.#finalized, rendered];
+    if (!this.#snapshot) {
+      const tail = this.#tail.trim();
+      const content = tail ? render(tail, this.#open).content : undefined;
+      if (content && content.length > this.maximum) throw new Error("Discord chunk exceeds maximum");
+      this.#snapshot = content ? [...this.#finalized, content] : [...this.#finalized];
+    }
+    return [...this.#snapshot];
   }
-}
-
-export function splitDiscordMessage(text: string, maximum = 2000): string[] {
-  const stream = new DiscordMessageStream(maximum);
-  stream.append(text);
-  return stream.snapshot();
 }
 
 export function deriveThreadTitle(request: string, maximum = 48): string {
@@ -44,22 +43,18 @@ export function deriveThreadTitle(request: string, maximum = 48): string {
   const title = request.replace(/[\r\n]+/g, " ").trim() || "Agent request";
   if (title.length <= maximum) return title;
   let end = maximum - 1;
-  if (isLowSurrogate(title.charCodeAt(end))) end--;
+  if (lowSurrogate(title.charCodeAt(end))) end--;
   return `${title.slice(0, end).trimEnd()}…`;
 }
 
-type Fence = Readonly<{ marker: string; info: string }>;
-type RenderedChunk = Readonly<{ content: string; open: Fence | null }>;
-type TakenChunk = Readonly<{ content: string; open: Fence | null; remaining?: string }>;
-
-function takeChunk(text: string, maximum: number, openFence: Fence | null): TakenChunk {
+function take(text: string, maximum: number, open: Fence | null): Chunk {
   const remaining = text.trimStart();
-  const prefix = openFence ? `${openFence.marker}${openFence.info}\n` : "";
-  const closing = openFence ? openFence.marker.length + 1 : 0;
-  const available = maximum - prefix.length - closing;
+  const prefix = open ? `${open.marker}${open.info}\n` : "";
+  const available = maximum - prefix.length - (open ? open.marker.length + 1 : 0);
   if (available <= 0) throw new Error("could not split Discord message");
-  let split = Math.min(remaining.trimEnd().length, available);
-  if (split < remaining.trimEnd().length) {
+  const length = remaining.trimEnd().length;
+  let split = Math.min(length, available);
+  if (split < length) {
     const boundary = Math.max(
       remaining.lastIndexOf("\n\n", split),
       remaining.lastIndexOf("\n", split),
@@ -67,50 +62,38 @@ function takeChunk(text: string, maximum: number, openFence: Fence | null): Take
     );
     if (boundary >= Math.floor(available / 3)) split = boundary;
   }
-  if (split > 0 && isLowSurrogate(remaining.charCodeAt(split))) split--;
-  if (split <= 0) throw new Error("could not split Discord message");
-
-  let rendered: RenderedChunk;
-  while (true) {
-    const piece = remaining.slice(0, split).trim();
-    rendered = renderChunk(piece, openFence);
-    if (rendered.content.length <= maximum) break;
-    split -= rendered.content.length - maximum;
-    if (split > 0 && isLowSurrogate(remaining.charCodeAt(split))) split--;
-    if (split <= 0) throw new Error("could not split Discord message");
+  if (split > 0 && lowSurrogate(remaining.charCodeAt(split))) split--;
+  while (split > 0) {
+    const chunk = render(remaining.slice(0, split).trim(), open);
+    if (chunk.content.length <= maximum) {
+      const tail = remaining.slice(split).trimStart();
+      return { ...chunk, remaining: tail.trim() ? tail : undefined };
+    }
+    split -= chunk.content.length - maximum;
+    if (split > 0 && lowSurrogate(remaining.charCodeAt(split))) split--;
   }
-  const tail = remaining.slice(split).trimStart();
-  return { ...rendered, remaining: tail.trim().length ? tail : undefined };
+  throw new Error("could not split Discord message");
 }
 
-function renderChunk(piece: string, openFence: Fence | null): RenderedChunk {
-  const prefix = openFence ? `${openFence.marker}${openFence.info}\n` : "";
-  const open = fenceState(piece, openFence);
-  const suffix = open ? `\n${open.marker}` : "";
-  return { content: `${prefix}${piece}${suffix}`, open };
-}
-
-function fenceState(piece: string, initial: Fence | null): Fence | null {
+function render(piece: string, initial: Fence | null): Chunk {
   let open = initial;
   for (const line of piece.split(/\r?\n/)) {
     if (open) {
       const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/);
       if (closing && closing[1][0] === open.marker[0] && closing[1].length >= open.marker.length) open = null;
-      continue;
+    } else {
+      const opening = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
+      if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
+        open = { marker: opening[1], info: opening[2] };
+      }
     }
-    const opening = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
-    if (!opening || opening[1][0] === "`" && opening[2].includes("`")) continue;
-    open = Object.freeze({ marker: opening[1], info: opening[2] });
   }
-  return open;
+  const prefix = initial ? `${initial.marker}${initial.info}\n` : "";
+  return { content: `${prefix}${piece}${open ? `\n${open.marker}` : ""}`, open };
 }
-
-function validateMaximum(maximum: number): void {
-  if (!Number.isSafeInteger(maximum) || maximum < 16) {
-    throw new RangeError("maximum must be an integer of at least 16");
-  }
+function validate(maximum: number): void {
+  if (!Number.isSafeInteger(maximum) || maximum < 16) throw new RangeError("maximum must be an integer of at least 16");
 }
-
-function isLowSurrogate(code: number): boolean {
+function lowSurrogate(code: number): boolean {
   return code >= 0xDC00 && code <= 0xDFFF;
 }

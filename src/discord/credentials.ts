@@ -11,13 +11,11 @@ const PERMISSIONS = [
   PermissionFlagsBits.AddReactions,
   PermissionFlagsBits.EmbedLinks,
   PermissionFlagsBits.AttachFiles,
-].reduce((permissions, flag) => permissions | flag, 0n).toString();
+].reduce((value, flag) => value | flag, 0n).toString();
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 export async function canonicalIdentity(directory: string): Promise<string> {
-  const canonical = await Deno.realPath(directory);
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(canonical));
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(await Deno.realPath(directory)));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -25,18 +23,18 @@ export async function getCredentialPath(directory: string): Promise<string> {
   const identity = await canonicalIdentity(directory);
   const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
   if (!home) throw new Error("home directory is unavailable");
-
   let base: string;
-  if (Deno.build.os === "windows") {
-    base = join(Deno.env.get("APPDATA") ?? home, "Agent Connector", "credentials");
-  } else if (Deno.build.os === "darwin") {
+  if (Deno.build.os === "windows") base = join(Deno.env.get("APPDATA") ?? home, "Agent Connector", "credentials");
+  else if (Deno.build.os === "darwin") {
     base = join(home, "Library", "Application Support", "Agent Connector", "credentials");
   } else {
     const configured = Deno.env.get("XDG_CONFIG_HOME");
-    const root = configured && isAbsolute(configured) ? configured : join(home, ".config");
-    base = join(root, "agent-connector", "credentials");
+    base = join(
+      configured && isAbsolute(configured) ? configured : join(home, ".config"),
+      "agent-connector",
+      "credentials",
+    );
   }
-
   await ensureDir(base);
   if (Deno.build.os !== "windows") await Deno.chmod(base, 0o700);
   return join(base, `${identity}.discord-token`);
@@ -65,11 +63,10 @@ export async function saveToken(directory: string, token: string): Promise<strin
     {
       using file = await Deno.open(temporary, { write: true, truncate: true, mode: 0o600 });
       const bytes = encoder.encode(token);
-      let written = 0;
-      while (written < bytes.length) {
-        const count = await file.write(bytes.subarray(written));
-        if (count === 0) throw new Error("token write made no progress");
-        written += count;
+      for (let offset = 0; offset < bytes.length;) {
+        const written = await file.write(bytes.subarray(offset));
+        if (!written) throw new Error("token write made no progress");
+        offset += written;
       }
       await file.sync();
     }
@@ -85,29 +82,32 @@ export async function saveToken(directory: string, token: string): Promise<strin
 export async function readSecret(label: string): Promise<string> {
   if (!Deno.stdin.isTerminal()) throw new Error("secret input requires a terminal");
   await Deno.stdout.write(encoder.encode(`${label}: `));
-  const windows = Deno.build.os === "windows";
-  const script = windows
-    ? `$s=Read-Host;$p=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s);try{[Runtime.InteropServices.Marshal]::PtrToStringBSTR($p)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p)}`
-    : `stty -echo; trap 'stty echo' EXIT; IFS= read -r secret; printf '\n%s' "$secret"`;
-  const result = await new Deno.Command(windows ? "powershell" : "sh", {
-    args: windows ? ["-NoProfile", "-Command", script] : ["-c", script],
-    stdin: "inherit",
-    stdout: "piped",
-    stderr: "inherit",
-  }).output();
-  if (!result.success) throw new Error("could not read secret input");
-  return decoder.decode(result.stdout).trim();
+  const input = new Uint8Array(1);
+  const secret: number[] = [];
+  Deno.stdin.setRaw(true);
+  try {
+    while (true) {
+      const read = await Deno.stdin.read(input);
+      if (read === null) throw new Error("secret input ended unexpectedly");
+      const byte = input[0];
+      if (byte === 3) throw new DOMException("secret input interrupted", "AbortError");
+      if (byte === 10 || byte === 13) break;
+      if (byte === 8 || byte === 127) secret.pop();
+      else {
+        if (byte < 33 || byte > 126 || secret.length === 8192) throw new Error("secret contains invalid input");
+        secret.push(byte);
+      }
+    }
+  } finally {
+    Deno.stdin.setRaw(false);
+    await Deno.stdout.write(encoder.encode("\n"));
+  }
+  if (!secret.length) throw new Error("token cannot be empty");
+  return String.fromCharCode(...secret);
 }
 
-export async function validateToken(
-  token: string,
-  expectedBotId?: string,
-  expectedApplicationId?: string,
-): Promise<{ botId: string; applicationId: string; botName: string }> {
-  const headers = {
-    Authorization: `Bot ${token}`,
-    "User-Agent": "AgentConnector/1",
-  };
+export async function validateToken(token: string, expectedBotId?: string, expectedApplicationId?: string) {
+  const headers = { Authorization: `Bot ${token}`, "User-Agent": "AgentConnector/1" };
   const request = async (path: string) => {
     const response = await fetch(`https://discord.com/api/v10/${path}`, { headers });
     if (!response.ok) throw new Error(`Discord ${path} failed: HTTP ${response.status}`);
@@ -115,7 +115,6 @@ export async function validateToken(
   };
   const user = await request("users/@me");
   const application = await request("oauth2/applications/@me");
-
   if (expectedBotId && user.id !== expectedBotId) {
     throw new Error(`token belongs to bot ${user.id}, but configuration expects ${expectedBotId}`);
   }
@@ -124,16 +123,11 @@ export async function validateToken(
       `token belongs to application ${application.id}, but configuration expects ${expectedApplicationId}`,
     );
   }
-
-  return {
-    botId: String(user.id),
-    applicationId: String(application.id),
-    botName: String(user.username),
-  };
+  return { botId: String(user.id), applicationId: String(application.id), botName: String(user.username) };
 }
 
 export function botInviteUrl(applicationId: string): string {
-  return `https://discord.com/oauth2/authorize?client_id=${
-    encodeURIComponent(applicationId)
-  }&permissions=${PERMISSIONS}&scope=${encodeURIComponent(OAuth2Scopes.Bot)}`;
+  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(applicationId)}&permissions=${PERMISSIONS}&scope=${
+    encodeURIComponent(OAuth2Scopes.Bot)
+  }`;
 }

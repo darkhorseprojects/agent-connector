@@ -1,7 +1,7 @@
 import { type Agent, type AgentError, check, run } from "@darkhorseprojects/portable-agents";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { Effect, Schema, Stream } from "effect";
-import type { Policy } from "../config.ts";
+import type { Policy } from "./config.ts";
 
 const Text = Schema.String.check(Schema.isPattern(/^[^\0]+$/));
 const AnyText = Schema.String.check(Schema.isPattern(/^[^\0]*$/));
@@ -24,31 +24,19 @@ export function agentExecutable(): string {
   const name = Deno.build.os === "windows" ? "agent.exe" : "agent";
   return Deno.build.standalone
     ? join(dirname(Deno.execPath()), name)
-    : fromFileUrl(new URL("../../../portable-agents/zig-out/bin/" + name, import.meta.url));
+    : fromFileUrl(new URL("../../portable-agents/zig-out/bin/" + name, import.meta.url));
 }
-function discordSource(): string {
-  return Deno.build.standalone
+function definition(policy: Policy): Agent {
+  const discord = Deno.build.standalone
     ? join(dirname(Deno.execPath()), "discord.md")
-    : fromFileUrl(new URL("../../discord.md", import.meta.url));
-}
-function agent(policy: Policy): Agent {
-  return {
-    directory: policy.directory,
-    entry: policy.entry,
-    mounts: { ...policy.mounts, discord: discordSource() },
-  };
+    : fromFileUrl(new URL("../discord.md", import.meta.url));
+  return { directory: policy.directory, entry: policy.entry, mounts: { ...policy.mounts, discord } };
 }
 function invocation(policy: Policy, frameBytes?: number, environment?: Readonly<Record<string, string>>) {
-  return {
-    executable: agentExecutable(),
-    cwd: policy.directory,
-    environment,
-    frameBytes,
-    luaMemory: policy.luaMemory,
-  };
+  return { executable: agentExecutable(), cwd: policy.directory, environment, frameBytes, luaMemory: policy.luaMemory };
 }
 export function checkAgent(policy: Policy): Effect.Effect<unknown, AgentError> {
-  return check(agent(policy), invocation(policy));
+  return check(definition(policy), invocation(policy));
 }
 
 export function runAgent(
@@ -58,24 +46,26 @@ export function runAgent(
   frameBytes: number,
   environment?: Readonly<Record<string, string>>,
 ): Stream.Stream<AgentEvent, AgentError | Error> {
-  let terminal = false;
-  const validated = run(agent(policy), input, invocation(policy, frameBytes, environment), [actor]).pipe(
-    Stream.mapEffect((value) =>
-      Effect.try({
-        try: () => {
-          const event = decode(value);
-          if (terminal) throw new Error("agent output follows its terminal event");
-          terminal = event.type === "store" || event.type === "done";
-          return Object.freeze(event);
-        },
-        catch: (error) => error instanceof Error ? error : new Error(String(error)),
-      })
-    ),
-  );
-  return Stream.concat(
-    validated,
-    Stream.fromEffectDrain(Effect.sync(() => {
-      if (!terminal) throw new Error("agent output has no terminal event");
-    })),
-  );
+  return Stream.unwrap(Effect.sync(() => {
+    let terminal = false;
+    const output = run(definition(policy), input, invocation(policy, frameBytes, environment), [actor]).pipe(
+      Stream.mapEffect((value) =>
+        Effect.try({
+          try: () => {
+            const event = decode(value);
+            if (terminal) throw new Error("agent output follows its terminal event");
+            terminal = event.type === "store" || event.type === "done";
+            return event;
+          },
+          catch: (error) => error instanceof Error ? error : new Error(String(error)),
+        })
+      ),
+    );
+    return Stream.concat(
+      output,
+      Stream.fromEffectDrain(Effect.sync(() => {
+        if (!terminal) throw new Error("agent output has no terminal event");
+      })),
+    );
+  }));
 }

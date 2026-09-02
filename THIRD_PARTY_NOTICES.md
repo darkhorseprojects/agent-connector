@@ -1,7 +1,7 @@
 # Third-party notices
 
-Agent Connector's compiled executable includes JavaScript and TypeScript from the dependencies pinned in `deno.lock`.
-Their own license terms apply.
+Agent Connector's compiled executable includes JavaScript and TypeScript from the dependencies pinned in `deno.lock`. Their own license
+terms apply.
 
 ## Portable Agents SDK
 
@@ -11,24 +11,21 @@ Their own license terms apply.
 
 ## Deno standard library
 
-The `@std/assert`, `@std/fs`, `@std/internal`, `@std/path`, and `@std/yaml` packages are Copyright the Deno authors and
-licensed under MIT.
+The `@std/assert`, `@std/fs`, `@std/internal`, and `@std/path` packages are Copyright the Deno authors and licensed under MIT.
 
 - Source: https://github.com/denoland/std
 - License: https://github.com/denoland/std/blob/main/LICENSE
 
 ## discord.js
 
-`discord.js` and the pinned `@discordjs/*` packages are Copyright the discord.js contributors and licensed under
-Apache-2.0.
+`discord.js` and the pinned `@discordjs/*` packages are Copyright the discord.js contributors and licensed under Apache-2.0.
 
 - Source: https://github.com/discordjs/discord.js
 - License: https://github.com/discordjs/discord.js/blob/main/LICENSE
 
 ## MIT-licensed npm dependencies
 
-The following pinned packages are licensed under MIT. Copyright and attribution notices are retained in their upstream
-distributions:
+The following pinned packages are licensed under MIT. Copyright and attribution notices are retained in their upstream distributions:
 
 - `@sapphire/async-queue`
 - `@sapphire/shapeshift` (discord.js transitive dependency)
