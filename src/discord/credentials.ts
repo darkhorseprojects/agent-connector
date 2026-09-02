@@ -1,84 +1,63 @@
-import { ensureDir } from "@std/fs";
 import { dirname, isAbsolute, join } from "@std/path";
 import { OAuth2Scopes, PermissionFlagsBits } from "discord.js";
 
-const PERMISSIONS = [
-  PermissionFlagsBits.ViewChannel,
-  PermissionFlagsBits.SendMessages,
-  PermissionFlagsBits.ReadMessageHistory,
-  PermissionFlagsBits.CreatePublicThreads,
-  PermissionFlagsBits.SendMessagesInThreads,
-  PermissionFlagsBits.AddReactions,
-  PermissionFlagsBits.EmbedLinks,
-  PermissionFlagsBits.AttachFiles,
-].reduce((value, flag) => value | flag, 0n).toString();
+const PERMISSIONS = (
+  PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages | PermissionFlagsBits.ReadMessageHistory |
+  PermissionFlagsBits.CreatePublicThreads | PermissionFlagsBits.SendMessagesInThreads |
+  PermissionFlagsBits.AddReactions |
+  PermissionFlagsBits.EmbedLinks | PermissionFlagsBits.AttachFiles
+).toString();
 const encoder = new TextEncoder();
+const snowflake = /^\d{17,20}$/;
 
-export async function canonicalIdentity(directory: string): Promise<string> {
+async function credentialPath(directory: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(await Deno.realPath(directory)));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-export async function getCredentialPath(directory: string): Promise<string> {
-  const identity = await canonicalIdentity(directory);
+  const identity = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
   const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
   if (!home) throw new Error("home directory is unavailable");
-  let base: string;
-  if (Deno.build.os === "windows") base = join(Deno.env.get("APPDATA") ?? home, "Agent Connector", "credentials");
-  else if (Deno.build.os === "darwin") {
-    base = join(home, "Library", "Application Support", "Agent Connector", "credentials");
-  } else {
-    const configured = Deno.env.get("XDG_CONFIG_HOME");
-    base = join(
-      configured && isAbsolute(configured) ? configured : join(home, ".config"),
-      "agent-connector",
-      "credentials",
-    );
-  }
-  await ensureDir(base);
+  const configured = Deno.env.get("XDG_CONFIG_HOME");
+  const base = Deno.build.os === "windows"
+    ? join(Deno.env.get("APPDATA") ?? home, "Agent Connector", "credentials")
+    : Deno.build.os === "darwin"
+    ? join(home, "Library", "Application Support", "Agent Connector", "credentials")
+    : join(configured && isAbsolute(configured) ? configured : join(home, ".config"), "agent-connector", "credentials");
+  await Deno.mkdir(base, { recursive: true, mode: 0o700 });
   if (Deno.build.os !== "windows") await Deno.chmod(base, 0o700);
   return join(base, `${identity}.discord-token`);
 }
-
 export async function loadToken(directory: string): Promise<string> {
-  const path = await getCredentialPath(directory);
   try {
-    const token = (await Deno.readTextFile(path)).trim();
+    const token = (await Deno.readTextFile(await credentialPath(directory))).trim();
     if (!token) throw new Error("token file is empty");
     return token;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      throw new Error(`no token configured for ${directory}; run 'agc connect' first`);
-    }
+    if (error instanceof Deno.errors.NotFound) throw new Error("no token; run 'agc connect' first");
     throw error;
   }
 }
-
-export async function saveToken(directory: string, token: string): Promise<string> {
+export async function saveToken(directory: string, token: string): Promise<void> {
   token = token.trim();
-  if (!token) throw new Error("token cannot be empty");
-  const path = await getCredentialPath(directory);
-  const temporary = await Deno.makeTempFile({ dir: dirname(path), prefix: ".discord-token-" });
+  if (!token || token.length > 8192 || /\s/.test(token)) throw new Error("token is invalid");
+  await writeAtomic(await credentialPath(directory), token, false, 0o600);
+}
+export async function writeAtomic(path: string, text: string, create: boolean, mode = 0o600): Promise<void> {
+  const temporary = await Deno.makeTempFile({ dir: dirname(path), prefix: ".agent-connector-" });
   try {
+    await Deno.writeTextFile(temporary, text, { mode });
     {
-      using file = await Deno.open(temporary, { write: true, truncate: true, mode: 0o600 });
-      const bytes = encoder.encode(token);
-      for (let offset = 0; offset < bytes.length;) {
-        const written = await file.write(bytes.subarray(offset));
-        if (!written) throw new Error("token write made no progress");
-        offset += written;
-      }
+      using file = await Deno.open(temporary, { write: true });
       await file.sync();
     }
-    if (Deno.build.os !== "windows") await Deno.chmod(temporary, 0o600);
-    await Deno.rename(temporary, path);
+    if (Deno.build.os !== "windows") await Deno.chmod(temporary, mode);
+    if (create) {
+      await Deno.link(temporary, path);
+      await Deno.remove(temporary);
+    } else await Deno.rename(temporary, path);
   } catch (error) {
     await Deno.remove(temporary).catch(() => {});
     throw error;
   }
-  return path;
 }
-
 export async function readSecret(label: string): Promise<string> {
   if (!Deno.stdin.isTerminal()) throw new Error("secret input requires a terminal");
   await Deno.stdout.write(encoder.encode(`${label}: `));
@@ -87,8 +66,7 @@ export async function readSecret(label: string): Promise<string> {
   Deno.stdin.setRaw(true);
   try {
     while (true) {
-      const read = await Deno.stdin.read(input);
-      if (read === null) throw new Error("secret input ended unexpectedly");
+      if (await Deno.stdin.read(input) === null) throw new Error("secret input ended unexpectedly");
       const byte = input[0];
       if (byte === 3) throw new DOMException("secret input interrupted", "AbortError");
       if (byte === 10 || byte === 13) break;
@@ -105,29 +83,26 @@ export async function readSecret(label: string): Promise<string> {
   if (!secret.length) throw new Error("token cannot be empty");
   return String.fromCharCode(...secret);
 }
-
-export async function validateToken(token: string, expectedBotId?: string, expectedApplicationId?: string) {
+export async function validateToken(token: string, expectedBot?: string, expectedApplication?: string) {
   const headers = { Authorization: `Bot ${token}`, "User-Agent": "AgentConnector/1" };
-  const request = async (path: string) => {
+  const request = async (path: string): Promise<Record<string, unknown>> => {
     const response = await fetch(`https://discord.com/api/v10/${path}`, { headers });
     if (!response.ok) throw new Error(`Discord ${path} failed: HTTP ${response.status}`);
-    return await response.json();
+    const value: unknown = await response.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid Discord ${path} data`);
+    return value as Record<string, unknown>;
   };
-  const user = await request("users/@me");
-  const application = await request("oauth2/applications/@me");
-  if (expectedBotId && user.id !== expectedBotId) {
-    throw new Error(`token belongs to bot ${user.id}, but configuration expects ${expectedBotId}`);
-  }
-  if (expectedApplicationId && application.id !== expectedApplicationId) {
-    throw new Error(
-      `token belongs to application ${application.id}, but configuration expects ${expectedApplicationId}`,
-    );
-  }
-  return { botId: String(user.id), applicationId: String(application.id), botName: String(user.username) };
+  const [user, application] = await Promise.all([request("users/@me"), request("oauth2/applications/@me")]);
+  const botId = typeof user.id === "string" && snowflake.test(user.id) ? user.id : "";
+  const applicationId = typeof application.id === "string" && snowflake.test(application.id) ? application.id : "";
+  const name = user.username;
+  const botName = typeof name === "string" && name.trim() && !name.includes("\0") ? name : "";
+  if (!botId || !applicationId || !botName) throw new Error("Discord identity response is invalid");
+  if (expectedBot && botId !== expectedBot) throw new Error(`token bot ${botId} does not match ${expectedBot}`);
+  if (expectedApplication && applicationId !== expectedApplication) throw new Error("token application mismatch");
+  return { botId, applicationId, botName };
 }
-
 export function botInviteUrl(applicationId: string): string {
-  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(applicationId)}&permissions=${PERMISSIONS}&scope=${
-    encodeURIComponent(OAuth2Scopes.Bot)
-  }`;
+  const query = new URLSearchParams({ client_id: applicationId, permissions: PERMISSIONS, scope: OAuth2Scopes.Bot });
+  return `https://discord.com/oauth2/authorize?${query}`;
 }

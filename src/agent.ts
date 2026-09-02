@@ -1,11 +1,11 @@
-import { type Agent, type AgentError, check, run } from "@darkhorseprojects/portable-agents";
+import { check, run } from "@darkhorseprojects/portable-agents";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { Effect, Schema, Stream } from "effect";
-import type { Policy } from "./config.ts";
+import type { Limits, Policy } from "./config.ts";
 
 const Text = Schema.String.check(Schema.isPattern(/^[^\0]+$/));
 const AnyText = Schema.String.check(Schema.isPattern(/^[^\0]*$/));
-const Id = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
+const Id = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
 const Result = { result: Schema.optional(Id) };
 const Event = Schema.Union([
   Schema.Struct({ type: Schema.Literal("reasoning"), text: Text }),
@@ -26,29 +26,44 @@ export function agentExecutable(): string {
     ? join(dirname(Deno.execPath()), name)
     : fromFileUrl(new URL("../../portable-agents/zig-out/bin/" + name, import.meta.url));
 }
-function definition(policy: Policy): Agent {
+function definition(policy: Policy) {
   const discord = Deno.build.standalone
     ? join(dirname(Deno.execPath()), "discord.md")
     : fromFileUrl(new URL("../discord.md", import.meta.url));
   return { directory: policy.directory, entry: policy.entry, mounts: { ...policy.mounts, discord } };
 }
-function invocation(policy: Policy, frameBytes?: number, environment?: Readonly<Record<string, string>>) {
-  return { executable: agentExecutable(), cwd: policy.directory, environment, frameBytes, luaMemory: policy.luaMemory };
+function environment(policy: Policy, grant?: Readonly<Record<string, string>>) {
+  const selected = Object.entries(policy.environment).flatMap(([target, source]) => {
+    const value = Deno.env.get(source);
+    return value === undefined ? [] : [[target, value]];
+  });
+  return Object.assign(Object.fromEntries(selected), grant);
 }
-export function checkAgent(policy: Policy): Effect.Effect<unknown, AgentError> {
+function invocation(policy: Policy, limits?: Limits, grant?: Readonly<Record<string, string>>) {
+  return {
+    executable: agentExecutable(),
+    cwd: policy.directory,
+    environment: environment(policy, grant),
+    frameBytes: limits?.frameBytes,
+    stderrBytes: limits?.stderrBytes,
+    lifetimeMs: limits?.lifetimeMs,
+    luaMemory: policy.luaMemory,
+  };
+}
+export function checkAgent(policy: Policy) {
   return check(definition(policy), invocation(policy));
 }
-
 export function runAgent(
   policy: Policy,
   actor: string,
   input: string,
-  frameBytes: number,
-  environment?: Readonly<Record<string, string>>,
-): Stream.Stream<AgentEvent, AgentError | Error> {
+  limits: Limits,
+  grant: Readonly<Record<string, string>>,
+) {
   return Stream.unwrap(Effect.sync(() => {
     let terminal = false;
-    const output = run(definition(policy), input, invocation(policy, frameBytes, environment), [actor]).pipe(
+    const argv = policy.runtime === undefined ? [actor] : [actor, policy.runtime];
+    const output = run(definition(policy), input, invocation(policy, limits, grant), argv).pipe(
       Stream.mapEffect((value) =>
         Effect.try({
           try: () => {

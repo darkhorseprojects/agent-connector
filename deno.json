@@ -4,18 +4,19 @@
   "links": ["../portable-agents"],
   "tasks": {
     "test": "deno test --frozen --allow-read --allow-write --allow-env --allow-run --allow-net tests",
-    "check": "deno run --frozen --allow-read --allow-run tools/check.ts",
+    "check": "deno fmt --check && deno lint && deno check src/main.ts tests",
     "compile": "deno run --frozen --allow-read --allow-write --allow-run tools/compile.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1.0.19",
     "@std/fs": "jsr:@std/fs@1.0.24",
     "@std/path": "jsr:@std/path@1.1.6",
+    "@std/yaml": "jsr:@std/yaml@1.2.0",
     "discord.js": "npm:discord.js@14.27.0",
     "effect": "npm:effect@4.0.0-rc.112"
   },
   "fmt": {
-    "lineWidth": 140,
+    "lineWidth": 120,
     "semiColons": true
   }
 }
