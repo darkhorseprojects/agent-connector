@@ -2,7 +2,7 @@ import * as NodeChildProcessSpawner from "@effect/platform-node/child-process";
 import * as NodeFileSystem from "@effect/platform-node/file-system";
 import * as NodePath from "@effect/platform-node/path";
 import { type Import, make as makeAgent } from "@darkhorseprojects/portable-agents";
-import { dirname, fromFileUrl, join } from "@std/path";
+import { dirname, fromFileUrl, isAbsolute, join } from "@std/path";
 import { Effect, Layer, Stream } from "effect";
 import { invocationConfig, type InvocationContext, type Policy } from "./config.ts";
 import type { DiscordGrant } from "./discord/rpc.ts";
@@ -22,9 +22,20 @@ export function agentExecutable(): string {
 }
 
 function discordSourceDir(): string {
-  return Deno.build.standalone
-    ? join(dirname(Deno.execPath()), "discord")
-    : fromFileUrl(new URL("../package", import.meta.url));
+  if (!Deno.build.standalone) return fromFileUrl(new URL("../packages/discord", import.meta.url));
+  const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
+  if (Deno.build.os === "windows") {
+    const data = Deno.env.get("LOCALAPPDATA");
+    if (!data || !isAbsolute(data)) throw new Error("LOCALAPPDATA is unavailable");
+    return join(data, "Agent Connector", "packages", "discord");
+  }
+  if (!home || !isAbsolute(home)) throw new Error("home directory is unavailable");
+  if (Deno.build.os === "darwin") {
+    return join(home, "Library", "Application Support", "Agent Connector", "packages", "discord");
+  }
+  const configured = Deno.env.get("XDG_DATA_HOME");
+  const data = configured && isAbsolute(configured) ? configured : join(home, ".local", "share");
+  return join(data, "agent-connector", "packages", "discord");
 }
 
 function environment(policy: Policy) {

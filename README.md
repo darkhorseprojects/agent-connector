@@ -4,6 +4,19 @@ Agent Connector routes Discord messages to Portable Agents policies. It passes t
 one-call overlay to the policy's opaque JSON config, supplies configured PA Imports, and renders incremental and final
 Agent bytes as Discord Markdown.
 
+## Install
+
+Install `agc` and `agent` into an executable directory. Install `dist/packages` into the per-user application-data
+directory:
+
+```text
+Linux:  ${XDG_DATA_HOME:-$HOME/.local/share}/agent-connector/packages
+macOS:  $HOME/Library/Application Support/Agent Connector/packages
+Windows: %LOCALAPPDATA%\Agent Connector\packages
+```
+
+Standalone Connector does not load packages beside its executable.
+
 ## Connect
 
 From a directory containing `ac.yaml`:
@@ -110,9 +123,9 @@ disabled.
 
 ## Discord Import
 
-`package/discord.md` is an optional PA Import that proxies scoped Discord operations for Lua. Its loopback grant permits
-reads in the selected channel, creation of messages, edits/deletes of grant-created messages, reactions to the
-triggering or grant-created message, and bounded attachments. Revocation prevents new calls.
+`packages/discord/discord.md` is an optional PA Import that proxies scoped Discord operations for Lua. Its loopback
+grant permits reads in the selected channel, creation of messages, edits/deletes of grant-created messages, reactions to
+the triggering or grant-created message, and bounded attachments. Revocation prevents new calls.
 
 An agent decides how to expose the Import. Zinc exposes configured Imports to generated Lua as:
 
