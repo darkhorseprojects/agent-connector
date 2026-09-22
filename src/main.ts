@@ -2,57 +2,75 @@ import manifest from "../deno.json" with { type: "json" };
 import { join, resolve } from "@std/path";
 import { Cause, Effect, Exit } from "effect";
 import { checkAgent } from "./agent.ts";
-import { configureIdentity, parseBootstrapConfig, parseConfig } from "./config.ts";
+import { emptyConfig, parseConfig } from "./config.ts";
 import { runConnector } from "./connector.ts";
-import { botInviteUrl, loadToken, readSecret, saveToken, validateToken, writeAtomic } from "./discord/credentials.ts";
+import {
+  botInviteUrl,
+  loadCredential,
+  readSecret,
+  registerCommand,
+  saveCredential,
+  validateToken,
+} from "./discord/credentials.ts";
 
-const CONFIG = "agent-connector.yaml";
+const CONFIG = "ac.yaml";
+
 async function directory(argument: string | undefined, create: boolean): Promise<string> {
   const path = resolve(Deno.cwd(), argument ?? ".");
   if (create) await Deno.mkdir(path, { recursive: true });
   return await Deno.realPath(path);
 }
+
 async function connect(path: string): Promise<void> {
-  const token = await readSecret("Discord bot token");
-  const current = await Deno.readTextFile(join(path, CONFIG)).catch((error) => {
-    if (error instanceof Deno.errors.NotFound) return undefined;
-    throw error;
-  });
-  const previous = current === undefined ? undefined : parseBootstrapConfig(current, path);
-  const identity = await validateToken(token, previous?.discord.bot, previous?.discord.application);
-  const changed = current === undefined || !previous?.discord.bot || !previous.discord.application;
-  if (changed) {
-    await writeAtomic(
-      join(path, CONFIG),
-      configureIdentity(current, identity.applicationId, identity.botId),
-      current === undefined,
-      0o644,
-    );
+  const configPath = join(path, CONFIG);
+  let source: string;
+  try {
+    source = await Deno.readTextFile(configPath);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    source = emptyConfig();
+    await Deno.writeTextFile(configPath, source, { createNew: true, mode: 0o644 });
   }
-  await saveToken(path, token);
+  parseConfig(source, path, true);
+  const token = await readSecret("Discord bot token");
+  const identity = await validateToken(token);
+  await registerCommand(token, identity.application);
+  await saveCredential(path, { token, application: identity.application, bot: identity.bot });
   console.log(
-    `Connected as ${identity.botName}\nInvite: ${botInviteUrl(identity.applicationId)}\nConfig: ${
-      changed ? current === undefined ? "created" : "updated" : "unchanged"
-    } ${join(path, CONFIG)}`,
+    `Connected as ${identity.botName}\nInvite: ${botInviteUrl(identity.application)}\nConfig: ${configPath}`,
   );
 }
+
+async function settings(path: string) {
+  const [source, credential] = await Promise.all([
+    Deno.readTextFile(join(path, CONFIG)),
+    loadCredential(path),
+  ]);
+  return {
+    ...parseConfig(source, path),
+    identity: { application: credential.application, bot: credential.bot },
+    token: credential.token,
+  };
+}
+
 async function check(path: string): Promise<void> {
-  const settings = parseConfig(await Deno.readTextFile(join(path, CONFIG)), path);
-  for (const [name, policy] of Object.entries(settings.policies)) {
+  const config = parseConfig(await Deno.readTextFile(join(path, CONFIG)), path);
+  for (const [name, policy] of Object.entries(config.policies)) {
     await Effect.runPromise(checkAgent(policy));
-    console.log(`${name}: ${policy.entry}`);
+    console.log(`${name}: ${policy.sourceDir}#${policy.entryModule}`);
   }
 }
+
 async function run(path: string): Promise<void> {
-  const settings = parseConfig(await Deno.readTextFile(join(path, CONFIG)), path);
-  for (const policy of Object.values(settings.policies)) await Effect.runPromise(checkAgent(policy));
+  const config = await settings(path);
+  for (const policy of Object.values(config.policies)) await Effect.runPromise(checkAgent(policy));
   const controller = new AbortController();
   const stop = () => controller.abort(new Error("Agent Connector interrupted"));
   const signals: Deno.Signal[] = Deno.build.os === "windows" ? ["SIGINT"] : ["SIGINT", "SIGTERM"];
   for (const signal of signals) Deno.addSignalListener(signal, stop);
   try {
     const exit = await Effect.runPromiseExit(
-      Effect.scoped(runConnector({ token: await loadToken(path), config: settings })),
+      Effect.scoped(runConnector({ token: config.token, config })),
       { signal: controller.signal },
     );
     if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) throw Cause.squash(exit.cause);
@@ -60,6 +78,7 @@ async function run(path: string): Promise<void> {
     for (const signal of signals) Deno.removeSignalListener(signal, stop);
   }
 }
+
 async function main(): Promise<void> {
   const [command, ...args] = Deno.args;
   if (!command || ["help", "--help", "-h"].includes(command)) {
@@ -72,6 +91,7 @@ async function main(): Promise<void> {
   if (!execute) throw new Error(`unknown command: ${command}`);
   await execute(await directory(args[0], command === "connect"));
 }
+
 if (import.meta.main) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

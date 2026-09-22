@@ -1,108 +1,139 @@
 # Agent Connector
 
-Agent Connector routes Discord conversations to Portable Agents policies. Every request uses a disposable direct Agent
-process with raw stdin, NDJSON stdout, stderr diagnostics, and optional invocation limits.
+Agent Connector routes Discord messages to Portable Agents policies. It passes the message as raw UTF-8 input, applies a
+one-call overlay to the policy's opaque JSON config, supplies configured PA Imports, and renders incremental and final
+Agent bytes as Discord Markdown.
 
 ## Connect
 
-From a configuration directory:
+From a directory containing `ac.yaml`:
 
 ```sh
 agc connect .
-```
-
-`connect` creates the directory if necessary, asks for the bot token with echo disabled, validates the bot and
-application, stores the token atomically in the platform credential directory, and prints a scoped invite link. If
-`agent-connector.yaml` is absent, it atomically creates a starter with the derived identity and empty policy/route maps.
-If YAML exists with missing identity IDs, it fills them; mismatches fail before writing.
-
-Zinc ships a useful `agent-connector.yaml` with a complete policy and no Discord IDs. Running `agc connect .` in the
-Zinc directory fills bot/application IDs. User, channel, and guild route IDs remain operator-selected.
-
-## YAML
-
-Configuration is strict YAML; unknown fields fail. A policy directory may be absolute or relative to the YAML directory.
-Entries and mounts are safe relative source paths.
-
-```yaml
-version: 1
-discord:
-  application: "<discord-application-id>"
-  bot: "<discord-bot-id>"
-concurrency: 4
-limits:
-  pending_requests: 32
-  frame_bytes: 1048576
-  stderr_bytes: 1048576
-  lifetime_ms: 600000
-  rpc_bytes: 8388608
-  rpc_timeout_ms: 30000
-  output_messages: 32
-policies:
-  zinc:
-    directory: "."
-    entry: zinc.md
-    mounts: {}
-    lua_memory: 96MiB
-    environment:
-      PATH: PATH
-      HOME: HOME
-    runtime:
-      maximum_model_calls: 32
-      maximum_output_tokens: 4096
-users: {}
-channels: {}
-guilds: {}
-```
-
-A policy environment mapping means `Agent variable: Connector service variable`. Connector materializes only selected
-values, then adds its private reserved Discord grant. The PA SDK clears the child environment first. Policy mappings
-cannot use `AGENT_CONNECTOR_*`.
-
-The optional `runtime` YAML value is validated as portable data and serialized to JSON as `argv[2]`; `argv[1]` is the
-actor. Connector does not interpret package-specific runtime fields. Optional Connector limits are unbounded when
-absent; Discord protocol/platform invariants remain fixed.
-
-```sh
 agc check .
 agc run .
 ```
 
-## Scheduling and shutdown
+`connect` prompts for the Discord bot token, validates its bot/application identity, registers the global `/agent`
+command, and stores the token and public identity in the native OS credential store. It uses macOS Keychain, Windows
+Credential Manager, or Linux Secret Service. There is no plaintext credential fallback. The token never enters `ac.yaml`
+or an Agent process.
 
-An actor is one Discord user under one application and policy. A newer request interrupts that actor’s previous Agent.
-Configured concurrency uses one semaphore; configured `pending_requests` limits distinct running/waiting actors. Absent
-scheduling limits are unbounded.
+## Configuration
 
-Discord listeners, Agent fibers, grants, RPC, and client are scoped. Shutdown removes listeners, interrupts/reaps direct
-Agent children, revokes grants, closes RPC, then destroys the client. PA makes no process-tree claim.
+Configuration is strict YAML. Unknown fields fail. Named policies are reusable as roots or leaf Imports. Routes map
+Discord snowflakes to policy names.
 
-## Discord capability
-
-Connector mounts `discord.md` as public `discord`. Zinc discovers it generically through sealed `package.loaded`; Zinc
-contains no Discord-specific prompt logic.
-
-```lua
-local discord = require("discord")
-return discord.request({ type = "createMessage", content = "hello" })
+```yaml
+version: 1
+concurrency: 4
+limits:
+  pending_requests: 32
+  lifetime_ms: 600000
+  rpc_bytes: 8388608
+  output_messages: 32
+policies:
+  zinc:
+    source: package
+    entry: zinc
+    memory_bytes: 100663296
+    environment:
+      - HOME
+      - LUA_PATH
+      - LUA_CPATH
+      - LD_LIBRARY_PATH
+      - DYLD_LIBRARY_PATH
+      - PATH
+      - SystemRoot
+    discord: true
+    imports: {}
+    config:
+      version: 1
+      actor: "discord:${application}:${policy}:member:${member}:channel:${channel}"
+      preset: safe
+      quota: null
+      imports:
+        discord: "Discord capability for channel ${channel}."
+members: {}
+channels: {}
+guilds: {}
 ```
 
-The random loopback grant fixes the channel and ownership context. Reads remain in that channel. Edit/delete require
-grant-created messages; failed deletion retains ownership for retry. Reactions allow the triggering or grant-created
-messages. Revocation becomes active before token removal: no REST call begins afterward, while already-started work may
-finish. Mutation responses are minimal.
+`directory` is optional and defaults to the directory containing `ac.yaml`; `source` is relative to it. Only listed
+environment variables are copied into the exact Agent process environment. `AGENT_CONNECTOR_*` names are reserved.
+
+Config strings may use `${application}`, `${policy}`, `${member}`, `${channel}`, `${guild}`, and `${message}`. Connector
+expands strings but does not interpret the resulting agent config.
+
+A policy can import another leaf policy:
+
+```yaml
+imports:
+  research:
+    policy: research
+    config:
+      actor: research-account
+```
+
+The edge config recursively overlays the imported policy's config. `discord: true` separately supplies the built-in
+Import named `discord`; it does not modify the agent's opaque config or its own `imports` field.
+
+## Routing
+
+Configured channel or thread-parent routes take precedence, followed by member routes, then guild routes. DMs require a
+member route. Configured channels receive ordinary messages directly; member and guild routes in a guild require a bot
+mention. Empty maps deny access.
+
+A newer request interrupts the same policy/member/channel request. Global concurrency and pending-request limits apply
+across message and command invocations.
+
+## Per-call config
+
+The registered command accepts a prompt and optional YAML object:
+
+```text
+/agent prompt:"Investigate this" config:"quota: 12000"
+```
+
+Connector recursively overlays this object onto the policy config for that call. Objects merge; arrays, scalars, and
+`null` replace. Any config key may be changed. The selected Agent owns validation and meaning. The override is not
+persisted and never modifies `ac.yaml`.
 
 ## Output
 
-Reasoning renders as blockquotes, tools as fenced code, and responses as Discord Markdown. Rendering is sequential and
-throttled. Whitespace-only output is discarded. Splitting always advances and preserves surrogate pairs and fence state.
-Durable completion adds a result footer; temporary completion does not.
+Connector uses PA protocol 1 streaming. Every `pa.emit(bytes)` frame and the terminal Agent output are treated as
+Markdown and rendered immediately in order. Connector only splits Discord messages safely, preserves fenced blocks,
+disables mentions, and enforces `output_messages`; it defines no reasoning, tool, Store, or continuation schema.
+
+Agents invoked through final-only `Agent.call` can use `pa.emit` safely because it is a no-op when emissions are
+disabled.
+
+## Discord Import
+
+`package/discord.md` is an optional PA Import that proxies scoped Discord operations for Lua. Its loopback grant permits
+reads in the selected channel, creation of messages, edits/deletes of grant-created messages, reactions to the
+triggering or grant-created message, and bounded attachments. Revocation prevents new calls.
+
+An agent decides how to expose the Import. Zinc exposes configured Imports to generated Lua as:
+
+```lua
+local result = self.agents.discord.call({ type = "createMessage", content = "hello" })
+return result.id
+```
+
+## Development
+
+Connector uses the sibling `../portable-agents` workspace package and binary.
 
 ```sh
+cd ../portable-agents
+zig build -Doptimize=ReleaseSafe -Dsystem-lua=true
+cd ../agent-connector
 deno task check
 deno task compile
 ```
 
-Handwritten production in `discord.md`, `src/*.ts`, and `src/discord/*.ts` is limited to 899 nonblank lines.
+Standalone compilation embeds the native keyring addon and requires FFI permission. Zinc additionally needs
+ABI-compatible Lua 5.5 and its Lua/native module paths in the selected environment.
 
 License: AGPL-3.0-only.

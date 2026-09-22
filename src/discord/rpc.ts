@@ -1,9 +1,11 @@
 import { Schema } from "effect";
 
-type ContextField = "actor" | "policy" | "userId" | "messageId" | "messageChannelId" | "channelId";
+type ContextField = "policy" | "memberId" | "channelId";
 export type DiscordContext = Readonly<
-  Record<ContextField, string> & Partial<Record<"parentChannelId" | "guildId", string>>
+  & Record<ContextField, string>
+  & Partial<Record<"messageId" | "messageChannelId" | "parentChannelId" | "guildId", string>>
 >;
+export type DiscordGrant = Readonly<{ config: string; description: string; revoke: () => void }>;
 type RestFile = Readonly<{ data: Uint8Array; name: string; contentType?: string }>;
 type RestOptions = Readonly<{ body?: unknown; query?: URLSearchParams; files?: readonly RestFile[] }>;
 type Method = "get" | "post" | "put" | "patch" | "delete";
@@ -39,8 +41,8 @@ export class DiscordRpcServer {
   readonly #server: Deno.HttpServer;
   readonly #url: string;
 
-  constructor(readonly rest: DiscordRest, readonly maximumBytes?: number, readonly timeoutMs?: number) {
-    if (!validLimit(maximumBytes) || !validLimit(timeoutMs)) throw new RangeError("RPC limit must be positive");
+  constructor(readonly rest: DiscordRest, readonly maximumBytes?: number) {
+    if (!validLimit(maximumBytes)) throw new RangeError("RPC limit must be positive");
     this.#server = Deno.serve(
       { hostname: "127.0.0.1", port: 0, onListen: () => {} },
       (request) => this.#handle(request),
@@ -48,22 +50,16 @@ export class DiscordRpcServer {
     this.#url = `http://127.0.0.1:${(this.#server.addr as Deno.NetAddr).port}`;
   }
 
-  grant(context: DiscordContext) {
+  grant(context: DiscordContext): DiscordGrant {
     const token = crypto.getRandomValues(new Uint8Array(32)).toHex();
     const grant: Grant = { active: true, context: Object.freeze({ ...context }), owned: new Set() };
     this.#grants.set(token, grant);
-    const callLimits = {
-      timeout_ms: this.timeoutMs,
-      request_bytes: this.maximumBytes,
-      response_bytes: this.maximumBytes,
-    };
     return Object.freeze({
-      environment: Object.freeze({
-        AGENT_CONNECTOR_DISCORD_URL: this.#url,
-        AGENT_CONNECTOR_DISCORD_TOKEN: token,
-        AGENT_CONNECTOR_DISCORD_CONTEXT: JSON.stringify(grant.context),
-        AGENT_CONNECTOR_DISCORD_LIMITS: JSON.stringify(callLimits),
-      }),
+      config: `${this.#url}\0${token}`,
+      description: `Discord channel capability. Context: ${JSON.stringify(grant.context)}. ` +
+        "Requests: {type:'listMessages',limit?,before?}, {type:'getMessage',message}, " +
+        "{type:'createMessage',content?,files?}, {type:'editMessage',message,content}, " +
+        "{type:'deleteMessage',message}, and reaction requests with message and emoji.",
       revoke: () => {
         grant.active = false;
         this.#grants.delete(token);
@@ -144,11 +140,11 @@ export class DiscordRpcServer {
       }
       case "addReaction":
       case "removeReaction": {
-        if (request.message !== grant.context.messageId && !grant.owned.has(request.message)) {
+        if (!grant.owned.has(request.message) && request.message !== grant.context.messageId) {
           throw new RequestError("message is outside this grant");
         }
         const target = request.message === grant.context.messageId
-          ? grant.context.messageChannelId
+          ? grant.context.messageChannelId!
           : grant.context.channelId;
         const route = `/channels/${target}/messages/${request.message}/reactions/${
           encodeURIComponent(request.emoji)

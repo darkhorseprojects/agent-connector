@@ -21,6 +21,7 @@ const status = await new Deno.Command(Deno.execPath(), {
     "--allow-net",
     "--allow-run",
     "--allow-env",
+    "--allow-ffi",
     "--output",
     output,
     "src/main.ts",
@@ -31,9 +32,8 @@ const status = await new Deno.Command(Deno.execPath(), {
 }).output();
 if (!status.success) throw new Error(`deno compile failed with status ${status.code}`);
 await copy(join(portableRoot, "zig-out", "bin", executableName), agentOutput);
-await copy(join(portableRoot, ".lux", "runtime"), join(root, "dist", ".lux", "runtime"));
-await copy(join(portableRoot, "NOTICE"), join(root, "dist", "PORTABLE_AGENTS_NOTICE"));
-await copy(join(root, "discord.md"), join(root, "dist", "discord.md"));
+await copy(join(portableRoot, "LICENSE"), join(root, "dist", "PORTABLE_AGENTS_LICENSE"));
+await copy(join(root, "package"), join(root, "dist", "discord"));
 await copy(join(root, "packaging"), join(root, "dist", "packaging"));
 for (const name of ["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"]) {
   await copy(join(root, name), join(root, "dist", name));
@@ -42,11 +42,11 @@ for (
   const path of [
     output,
     agentOutput,
-    join(root, "dist", "discord.md"),
+    join(root, "dist", "discord", "discord.md"),
     join(root, "dist", "LICENSE"),
     join(root, "dist", "README.md"),
     join(root, "dist", "THIRD_PARTY_NOTICES.md"),
-    join(root, "dist", "PORTABLE_AGENTS_NOTICE"),
+    join(root, "dist", "PORTABLE_AGENTS_LICENSE"),
     join(root, "dist", "packaging", "systemd", "agc.service.example"),
     join(root, "dist", "packaging", "launchd", "io.darkhorseprojects.agc.plist.example"),
     join(root, "dist", "packaging", "windows", "install-agc-task.ps1"),

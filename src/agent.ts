@@ -1,24 +1,18 @@
-import { check, run } from "@darkhorseprojects/portable-agents";
+import * as NodeChildProcessSpawner from "@effect/platform-node/child-process";
+import * as NodeFileSystem from "@effect/platform-node/file-system";
+import * as NodePath from "@effect/platform-node/path";
+import { type Import, make as makeAgent } from "@darkhorseprojects/portable-agents";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { Effect, Schema, Stream } from "effect";
-import type { Limits, Policy } from "./config.ts";
+import { Effect, Layer, Stream } from "effect";
+import { invocationConfig, type InvocationContext, type Policy } from "./config.ts";
+import type { DiscordGrant } from "./discord/rpc.ts";
 
-const Text = Schema.String.check(Schema.isPattern(/^[^\0]+$/));
-const AnyText = Schema.String.check(Schema.isPattern(/^[^\0]*$/));
-const Id = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
-const Result = { result: Schema.optional(Id) };
-const Event = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("reasoning"), text: Text }),
-  Schema.Struct({ type: Schema.Literal("reasoning_complete"), ...Result }),
-  Schema.Struct({ type: Schema.Literal("response"), text: Text }),
-  Schema.Struct({ type: Schema.Literal("response_complete"), ...Result }),
-  Schema.Struct({ type: Schema.Literal("tool_call"), call: Text, code: Text, ...Result }),
-  Schema.Struct({ type: Schema.Literal("tool_result"), call: Text, text: AnyText, ok: Schema.Boolean, ...Result }),
-  Schema.Struct({ type: Schema.Literal("store"), result: Id, start: Id }),
-  Schema.Struct({ type: Schema.Literal("done"), durable: Schema.Literal(false) }),
-]);
-export type AgentEvent = Schema.Schema.Type<typeof Event>;
-const decode = Schema.decodeUnknownSync(Event, { onExcessProperty: "error" });
+const encoder = new TextEncoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
+const processLayer = Layer.provideMerge(
+  NodeChildProcessSpawner.layer,
+  Layer.merge(NodeFileSystem.layer, NodePath.layer),
+);
 
 export function agentExecutable(): string {
   const name = Deno.build.os === "windows" ? "agent.exe" : "agent";
@@ -26,61 +20,87 @@ export function agentExecutable(): string {
     ? join(dirname(Deno.execPath()), name)
     : fromFileUrl(new URL("../../portable-agents/zig-out/bin/" + name, import.meta.url));
 }
-function definition(policy: Policy) {
-  const discord = Deno.build.standalone
-    ? join(dirname(Deno.execPath()), "discord.md")
-    : fromFileUrl(new URL("../discord.md", import.meta.url));
-  return { directory: policy.directory, entry: policy.entry, mounts: { ...policy.mounts, discord } };
+
+function discordSourceDir(): string {
+  return Deno.build.standalone
+    ? join(dirname(Deno.execPath()), "discord")
+    : fromFileUrl(new URL("../package", import.meta.url));
 }
-function environment(policy: Policy, grant?: Readonly<Record<string, string>>) {
-  const selected = Object.entries(policy.environment).flatMap(([target, source]) => {
-    const value = Deno.env.get(source);
-    return value === undefined ? [] : [[target, value]];
-  });
-  return Object.assign(Object.fromEntries(selected), grant);
+
+function environment(policy: Policy) {
+  return Object.fromEntries(
+    policy.environment.flatMap((name) => {
+      const value = Deno.env.get(name);
+      return value === undefined ? [] : [[name, value]];
+    }),
+  );
 }
-function invocation(policy: Policy, limits?: Limits, grant?: Readonly<Record<string, string>>) {
-  return {
+
+function makePolicyAgent(policy: Policy) {
+  return makeAgent({
     executable: agentExecutable(),
+    sourceDir: policy.sourceDir,
+    entryModule: policy.entryModule,
+    memoryBytes: policy.memoryBytes,
+    instructions: policy.instructions,
     cwd: policy.directory,
-    environment: environment(policy, grant),
-    frameBytes: limits?.frameBytes,
-    stderrBytes: limits?.stderrBytes,
-    lifetimeMs: limits?.lifetimeMs,
-    luaMemory: policy.luaMemory,
-  };
+    environment: environment(policy),
+  });
 }
+
 export function checkAgent(policy: Policy) {
-  return check(definition(policy), invocation(policy));
+  return Effect.tryPromise({
+    try: async () => {
+      const output = await new Deno.Command(agentExecutable(), {
+        args: ["check", policy.sourceDir, policy.entryModule],
+        cwd: policy.directory,
+        env: environment(policy),
+        clearEnv: true,
+        stdin: "null",
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      if (!output.success) throw new Error(decoder.decode(output.stderr).trim() || `agent check exited ${output.code}`);
+    },
+    catch: (error) => error instanceof Error ? error : new Error(String(error)),
+  });
 }
-export function runAgent(
-  policy: Policy,
-  actor: string,
-  input: string,
-  limits: Limits,
-  grant: Readonly<Record<string, string>>,
-) {
-  return Stream.unwrap(Effect.sync(() => {
-    let terminal = false;
-    const argv = policy.runtime === undefined ? [actor] : [actor, policy.runtime];
-    const output = run(definition(policy), input, invocation(policy, limits, grant), argv).pipe(
-      Stream.mapEffect((value) =>
-        Effect.try({
-          try: () => {
-            const event = decode(value);
-            if (terminal) throw new Error("agent output follows its terminal event");
-            terminal = event.type === "store" || event.type === "done";
-            return event;
-          },
-          catch: (error) => error instanceof Error ? error : new Error(String(error)),
-        })
-      ),
+
+export function runAgent(options: {
+  policy: Policy;
+  policies: Readonly<Record<string, Policy>>;
+  context: InvocationContext;
+  input: string;
+  override: Readonly<Record<string, unknown>>;
+  discord?: DiscordGrant;
+}) {
+  return Stream.unwrap(Effect.gen(function* () {
+    const root = yield* makePolicyAgent(options.policy);
+    const imports: Import[] = [];
+    for (const [name, value] of Object.entries(options.policy.imports)) {
+      const policy = options.policies[value.policy];
+      imports.push({
+        name,
+        agent: yield* makePolicyAgent(policy),
+        config: invocationConfig(policy, { ...options.context, policy: value.policy }, value.config),
+      });
+    }
+    if (options.policy.discord) {
+      if (!options.discord) return yield* Effect.fail(new Error("Discord grant is unavailable"));
+      imports.push({
+        name: "discord",
+        agent: yield* makeAgent({
+          executable: agentExecutable(),
+          sourceDir: discordSourceDir(),
+          entryModule: "discord",
+        }),
+        config: encoder.encode(options.discord.config),
+      });
+    }
+    return root.stream(
+      encoder.encode(options.input),
+      invocationConfig(options.policy, options.context, options.override),
+      imports,
     );
-    return Stream.concat(
-      output,
-      Stream.fromEffectDrain(Effect.sync(() => {
-        if (!terminal) throw new Error("agent output has no terminal event");
-      })),
-    );
-  }));
+  })).pipe(Stream.provide(processLayer));
 }

@@ -6,52 +6,85 @@ const snowflake = /^\d{17,20}$/;
 const variable = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const moduleName = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/^[^\0]+$/));
-const Snowflake = Text.check(Schema.isPattern(snowflake));
 const Positive = Schema.Number.check(
   Schema.isInt(),
   Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
 );
-const TextMap = Schema.Record(Schema.String, Text);
+const Routes = Schema.Record(Schema.String, Text);
 const LimitSource = Schema.Struct({
   pending_requests: Schema.optional(Positive),
-  frame_bytes: Schema.optional(Positive),
-  stderr_bytes: Schema.optional(Positive),
   lifetime_ms: Schema.optional(Positive),
   rpc_bytes: Schema.optional(Positive),
-  rpc_timeout_ms: Schema.optional(Positive),
   output_messages: Schema.optional(Positive),
+});
+const ImportSource = Schema.Struct({
+  policy: Text,
+  config: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+});
+const PolicySource = Schema.Struct({
+  directory: Schema.optional(Text),
+  source: Text,
+  entry: Text,
+  memory_bytes: Positive,
+  instructions: Schema.optional(Positive),
+  environment: Schema.optional(Schema.Array(Text)),
+  discord: Schema.optional(Schema.Boolean),
+  imports: Schema.optional(Schema.Record(Schema.String, ImportSource)),
+  config: Schema.Record(Schema.String, Schema.Unknown),
 });
 const Root = Schema.Struct({
   version: Schema.Literal(1),
-  discord: Schema.Struct({ application: Schema.optional(Snowflake), bot: Schema.optional(Snowflake) }),
   concurrency: Schema.optional(Positive),
   limits: Schema.optional(LimitSource),
   policies: Schema.Record(Schema.String, Schema.Unknown),
-  users: TextMap,
-  channels: TextMap,
-  guilds: TextMap,
-});
-const PolicySource = Schema.Struct({
-  directory: Text,
-  entry: Text,
-  mounts: TextMap,
-  lua_memory: Text,
-  environment: Schema.optional(TextMap),
-  runtime: Schema.optional(Schema.Unknown),
+  members: Routes,
+  channels: Routes,
+  guilds: Routes,
 });
 const decodeRoot = Schema.decodeUnknownSync(Root, { onExcessProperty: "error" });
 const decodePolicy = Schema.decodeUnknownSync(PolicySource, { onExcessProperty: "error" });
 
-export type Policy = ReturnType<typeof policy>;
-export type Limits = ReturnType<typeof parseBootstrapConfig>["limits"];
-export type ConnectorConfig = ReturnType<typeof parseConfig>;
+export type Policy = ReturnType<typeof parsePolicy>;
+export type Limits = ReturnType<typeof parseConfig>["limits"];
+export type ConnectorConfig =
+  & ReturnType<typeof parseConfig>
+  & Readonly<{
+    identity: { application: string; bot: string };
+  }>;
+export type InvocationContext = Readonly<{
+  application: string;
+  policy: string;
+  member: string;
+  channel: string;
+  guild?: string;
+  message: string;
+}>;
 
-export function parseBootstrapConfig(source: string, directory: string) {
+export function parseConfig(source: string, directory: string, allowEmpty = false) {
   const root = decodeRoot(parseYaml(source));
   const policies: Record<string, Policy> = Object.create(null);
   for (const [name, value] of Object.entries(root.policies)) {
     if (!name || ["__proto__", "constructor", "prototype"].includes(name)) throw new TypeError("invalid policy name");
-    policies[name] = policy(name, value, directory);
+    policies[name] = parsePolicy(name, value, directory);
+  }
+  if (!allowEmpty && !Object.keys(policies).length) throw new TypeError("at least one policy must be defined");
+  for (const [name, policy] of Object.entries(policies)) {
+    for (const [importName, imported] of Object.entries(policy.imports)) {
+      if (!importName || importName === "pa" || importName.includes("\0")) {
+        throw new TypeError(`policy '${name}' import name is invalid`);
+      }
+      if (!Object.hasOwn(policies, imported.policy)) {
+        throw new TypeError(`policy '${name}' imports unknown policy: ${imported.policy}`);
+      }
+      const target = policies[imported.policy];
+      if (target === policy) throw new TypeError(`policy '${name}' cannot import itself`);
+      if (target.discord || Object.keys(target.imports).length) {
+        throw new TypeError(`policy '${name}' import '${importName}' is not a leaf policy`);
+      }
+    }
+    if (policy.discord && Object.hasOwn(policy.imports, "discord")) {
+      throw new TypeError(`policy '${name}' declares the reserved discord import`);
+    }
   }
   const route = (input: Record<string, string>, field: string) =>
     Object.fromEntries(
@@ -62,69 +95,125 @@ export function parseBootstrapConfig(source: string, directory: string) {
       }),
     );
   return {
-    discord: root.discord,
     concurrency: root.concurrency,
     limits: {
       pendingRequests: root.limits?.pending_requests,
-      frameBytes: root.limits?.frame_bytes,
-      stderrBytes: root.limits?.stderr_bytes,
       lifetimeMs: root.limits?.lifetime_ms,
       rpcBytes: root.limits?.rpc_bytes,
-      rpcTimeoutMs: root.limits?.rpc_timeout_ms,
       outputMessages: root.limits?.output_messages,
     },
     policies,
-    users: route(root.users, "users"),
+    members: route(root.members, "members"),
     channels: route(root.channels, "channels"),
     guilds: route(root.guilds, "guilds"),
   };
 }
-export function parseConfig(source: string, directory: string) {
-  const config = parseBootstrapConfig(source, directory);
-  if (!config.discord.application || !config.discord.bot) {
-    throw new TypeError("run 'agc connect' to configure Discord identity");
+
+export function emptyConfig(): string {
+  return stringifyYaml({ version: 1, policies: {}, members: {}, channels: {}, guilds: {} });
+}
+
+export function parseOverride(source: string): Record<string, unknown> {
+  const value = parseYaml(source);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("config override must be an object");
   }
-  if (!Object.keys(config.policies).length) throw new TypeError("at least one policy must be defined");
-  return { ...config, discord: { application: config.discord.application, bot: config.discord.bot } };
+  return jsonObject(value, "config override");
 }
-export function configureIdentity(source: string | undefined, application: string, bot: string): string {
-  const document = source === undefined
-    ? { version: 1, discord: {}, policies: {}, users: {}, channels: {}, guilds: {} }
-    : decodeRoot(parseYaml(source));
-  return stringifyYaml({ ...document, discord: { ...document.discord, application, bot } });
-}
-function policy(name: string, value: unknown, directory: string) {
-  const input = decodePolicy(value);
-  const mounts: Record<string, string> = Object.create(null);
-  for (const [module, path] of Object.entries(input.mounts)) {
-    if (!moduleName.test(module) || module === "discord" || module.startsWith("pa.")) {
-      throw new TypeError(`policy '${name}' mount is invalid`);
+
+export function invocationConfig(
+  policy: Policy,
+  context: InvocationContext,
+  override: Readonly<Record<string, unknown>> = {},
+): Uint8Array {
+  const values: Record<string, string> = {
+    application: context.application,
+    policy: context.policy,
+    member: context.member,
+    channel: context.channel,
+    guild: context.guild ?? "",
+    message: context.message,
+  };
+  const expand = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      return value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
+        if (!Object.hasOwn(values, name)) throw new TypeError(`unknown config variable: ${name}`);
+        return values[name];
+      });
     }
-    mounts[module] = sourcePath(path, `policy '${name}' mount`);
-  }
-  const environment: Record<string, string> = Object.create(null);
+    if (Array.isArray(value)) return value.map(expand);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expand(item)]));
+    }
+    return value;
+  };
+  return new TextEncoder().encode(JSON.stringify(expand(merge(policy.config, override))));
+}
+
+function parsePolicy(name: string, value: unknown, directory: string) {
+  const input = decodePolicy(value);
+  if (!moduleName.test(input.entry) || input.entry === "pa") throw new TypeError(`policy '${name}' entry is invalid`);
+  const source = relativePath(input.source, `policy '${name}' source`);
+  const environment: string[] = [];
   const names = new Set<string>();
-  for (const [target, source] of Object.entries(input.environment ?? {})) {
+  for (const variableName of input.environment ?? []) {
     if (
-      !variable.test(target) || !variable.test(source) || /^AGENT_CONNECTOR_/i.test(target) ||
-      /^AGENT_CONNECTOR_/i.test(source) || names.has(target.toLowerCase())
-    ) throw new TypeError(`policy '${name}' environment mapping is invalid`);
-    names.add(target.toLowerCase());
-    environment[target] = source;
+      !variable.test(variableName) || /^AGENT_CONNECTOR_/i.test(variableName) || names.has(variableName.toLowerCase())
+    ) throw new TypeError(`policy '${name}' environment is invalid`);
+    names.add(variableName.toLowerCase());
+    environment.push(variableName);
   }
+  const imports: Record<string, { policy: string; config: Record<string, unknown> }> = Object.create(null);
+  for (const [importName, imported] of Object.entries(input.imports ?? {})) {
+    imports[importName] = {
+      policy: imported.policy,
+      config: jsonObject(imported.config ?? {}, `policy '${name}' import '${importName}' config`),
+    };
+  }
+  const root = input.directory === undefined
+    ? directory
+    : isAbsolute(input.directory)
+    ? input.directory
+    : resolve(directory, input.directory);
   return {
-    directory: isAbsolute(input.directory) ? input.directory : resolve(directory, input.directory),
-    entry: sourcePath(input.entry, `policy '${name}' entry`),
-    mounts,
-    luaMemory: input.lua_memory,
+    directory: root,
+    sourceDir: resolve(root, source),
+    entryModule: input.entry,
+    memoryBytes: input.memory_bytes,
+    instructions: input.instructions === undefined ? undefined : BigInt(input.instructions),
     environment,
-    runtime: input.runtime === undefined ? undefined : JSON.stringify(input.runtime),
+    discord: input.discord ?? false,
+    imports,
+    config: jsonObject(input.config, `policy '${name}' config`),
   };
 }
-function sourcePath(path: string, name: string): string {
+
+function merge(base: unknown, overlay: unknown): unknown {
+  if (
+    base && overlay && typeof base === "object" && typeof overlay === "object" && !Array.isArray(base) &&
+    !Array.isArray(overlay)
+  ) {
+    const output: Record<string, unknown> = Object.assign(Object.create(null), base);
+    for (const [key, value] of Object.entries(overlay)) output[key] = merge(output[key], value);
+    return output;
+  }
+  return overlay;
+}
+
+function jsonObject(value: unknown, name: string): Record<string, unknown> {
+  try {
+    const encoded = JSON.stringify(value);
+    const decoded: unknown = JSON.parse(encoded);
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) throw new TypeError();
+    return decoded as Record<string, unknown>;
+  } catch {
+    throw new TypeError(`${name} must be a JSON object`);
+  }
+}
+
+function relativePath(path: string, name: string): string {
   if (
     isAbsolute(path) || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..")
   ) throw new TypeError(`${name} must be a safe relative path`);
-  if (!path.endsWith(".lua") && !path.endsWith(".md")) throw new TypeError(`${name} must end in .lua or .md`);
   return path;
 }

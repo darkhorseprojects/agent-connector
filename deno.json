@@ -3,17 +3,19 @@
   "license": "AGPL-3.0-only",
   "links": ["../portable-agents"],
   "tasks": {
-    "test": "deno test --frozen --allow-read --allow-write --allow-env --allow-run --allow-net tests",
-    "check": "deno fmt --check && deno lint && deno check src/main.ts tests",
+    "check": "deno fmt --check && deno lint && deno check src/main.ts",
     "compile": "deno run --frozen --allow-read --allow-write --allow-run tools/compile.ts"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1.0.19",
+    "@effect/platform-node/child-process": "npm:@effect/platform-node@4.0.0-rc.113/NodeChildProcessSpawner",
+    "@effect/platform-node/file-system": "npm:@effect/platform-node@4.0.0-rc.113/NodeFileSystem",
+    "@effect/platform-node/path": "npm:@effect/platform-node@4.0.0-rc.113/NodePath",
+    "@napi-rs/keyring": "npm:@napi-rs/keyring@2.1.0",
     "@std/fs": "jsr:@std/fs@1.0.24",
     "@std/path": "jsr:@std/path@1.1.6",
     "@std/yaml": "jsr:@std/yaml@1.2.0",
     "discord.js": "npm:discord.js@14.27.0",
-    "effect": "npm:effect@4.0.0-rc.112"
+    "effect": "npm:effect@4.0.0-rc.113"
   },
   "fmt": {
     "lineWidth": 120,

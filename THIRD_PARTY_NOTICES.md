@@ -3,16 +3,16 @@
 Agent Connector's compiled executable includes JavaScript and TypeScript from the dependencies pinned in `deno.lock`.
 Their own license terms apply.
 
-## Portable Agents SDK
+## Portable Agents
 
 - Package: `@darkhorseprojects/portable-agents`
-- License: AGPL-3.0-only
+- License: MIT
 - Source: https://github.com/darkhorseprojects/portable-agents
 
 ## Deno standard library
 
-The `@std/assert`, `@std/fs`, `@std/internal`, `@std/path`, and `@std/yaml` packages are Copyright the Deno authors and
-licensed under MIT.
+The `@std/fs`, `@std/internal`, `@std/path`, and `@std/yaml` packages are Copyright the Deno authors and licensed under
+MIT.
 
 - Source: https://github.com/denoland/std
 - License: https://github.com/denoland/std/blob/main/LICENSE
@@ -50,9 +50,15 @@ Their exact versions and integrity hashes are recorded in `deno.lock`.
 
 ## Effect
 
-- Package: `effect`
+- Packages: `effect`, `@effect/platform-node`, and `@effect/platform-node-shared`
 - License: MIT
 - Source: https://github.com/Effect-TS/effect
+
+## keyring
+
+- Package: `@napi-rs/keyring` and its platform binary package
+- License: MIT
+- Source: https://github.com/Brooooooklyn/keyring-node
 
 ## tslib
 
