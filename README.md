@@ -50,6 +50,7 @@ policies:
     source: package
     entry: zinc
     memory_bytes: 100663296
+    instructions: 200000000
     environment:
       - HOME
       - LUA_PATH
@@ -66,7 +67,12 @@ policies:
       preset: safe
       quota: null
       imports:
-        discord: "Discord capability for channel ${channel}."
+        discord: >-
+          Discord capability for channel ${channel} and triggering message ${message}. Use
+          self.agents.discord.call(request). Requests are Lua tables: {type="listMessages",limit?,before?},
+          {type="getMessage",message=ID}, {type="createMessage",content?,files?},
+          {type="editMessage",message=ID,content=TEXT}, {type="deleteMessage",message=ID},
+          {type="addReaction",message=ID,emoji=EMOJI}, or {type="removeReaction",message=ID,emoji=EMOJI}.
 members: {}
 channels: {}
 guilds: {}
