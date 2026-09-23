@@ -31,14 +31,12 @@ export class DiscordRenderer {
   }
 
   async write(text: string): Promise<void> {
-    await this.#flush();
-    this.#stream.finish();
+    await this.finish();
     this.#shown = "";
     this.#lastUpdate = 0;
     if (!text.trim()) return;
     this.#stream.append(text);
-    this.#stream.finish();
-    await this.#flush();
+    await this.finish();
   }
 
   async result(text: string): Promise<void> {
@@ -50,7 +48,6 @@ export class DiscordRenderer {
   }
 
   async finish(): Promise<void> {
-    await this.#flush();
     this.#stream.finish();
     await this.#flush();
   }

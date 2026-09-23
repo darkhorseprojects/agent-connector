@@ -60,11 +60,12 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
     const fibers = yield* FiberMap.make<string>();
     const submit = yield* FiberMap.runtimePromise(fibers)<never>();
     const semaphore = Semaphore.makeUnsafe(options.config.concurrency);
+    let preparing = 0;
 
     const enqueue = (work: Work) => {
       const key = JSON.stringify([work.context.policy, work.context.member, work.context.channel]);
       const pending = options.config.limits.pendingRequests;
-      if (!FiberMap.hasUnsafe(fibers, key) && [...fibers].length >= pending) {
+      if (!FiberMap.hasUnsafe(fibers, key) && [...fibers].length + preparing >= pending) {
         void work.target.send({ content: "Agent queue is full. Try again later.", allowedMentions: { parse: [] } });
         return;
       }
@@ -82,10 +83,26 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
     const receiveMessage = (message: Message) => {
       const request = route(options.config, message);
       if (!request) return;
+      const key = JSON.stringify([request.policy, message.author.id, message.channelId]);
+      const reserve = request.createThread || !FiberMap.hasUnsafe(fibers, key);
+      if (reserve && [...fibers].length + preparing >= options.config.limits.pendingRequests) {
+        if (message.channel.isSendable()) {
+          void message.channel.send({
+            content: "Agent queue is full. Try again later.",
+            allowedMentions: { parse: [] },
+          });
+        }
+        return;
+      }
+      if (reserve) preparing++;
       const id = crypto.randomUUID();
       void messageWork(message, request, options.config, id).then((work) => {
+        if (reserve) preparing--;
         if (work) enqueue(work);
-      }).catch((error) => reportIncident(message.channel as unknown as RenderTarget, id, error, log));
+      }, (error) => {
+        if (reserve) preparing--;
+        return reportIncident(message.channel as unknown as RenderTarget, id, error, log);
+      });
     };
     const receiveInteraction = (interaction: ChatInputCommandInteraction) => {
       if (interaction.commandName !== "agent") return;
