@@ -28,6 +28,7 @@ const PolicySource = Schema.Struct({
   instructions: Schema.optional(Positive),
   discord: Schema.optional(Schema.Boolean),
   imports: Schema.optional(Schema.Record(Schema.String, ImportSource)),
+  overrides: Schema.optional(Schema.Array(Text)),
   config: Schema.Record(Schema.String, Schema.Unknown),
 });
 const Root = Schema.Struct({
@@ -93,12 +94,12 @@ export function parseConfig(source: string, directory: string, allowEmpty = fals
       }),
     );
   return {
-    concurrency: root.concurrency,
+    concurrency: root.concurrency ?? 4,
     limits: {
-      pendingRequests: root.limits?.pending_requests,
-      lifetimeMs: root.limits?.lifetime_ms,
-      rpcBytes: root.limits?.rpc_bytes,
-      outputMessages: root.limits?.output_messages,
+      pendingRequests: root.limits?.pending_requests ?? 32,
+      lifetimeMs: root.limits?.lifetime_ms ?? 600000,
+      rpcBytes: root.limits?.rpc_bytes ?? 8388608,
+      outputMessages: root.limits?.output_messages ?? 32,
     },
     policies,
     members: route(root.members, "members"),
@@ -111,12 +112,16 @@ export function emptyConfig(): string {
   return stringifyYaml({ version: 1, policies: {}, members: {}, channels: {}, guilds: {} });
 }
 
-export function parseOverride(source: string): Record<string, unknown> {
+export function parseOverride(source: string, allowed: ReadonlySet<string>): Record<string, unknown> {
   const value = parseYaml(source);
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("config override must be an object");
   }
-  return jsonObject(value, "config override");
+  const override = jsonObject(value, "config override");
+  for (const key of Object.keys(override)) {
+    if (!allowed.has(key)) throw new TypeError(`config field '${key}' cannot be overridden`);
+  }
+  return override;
 }
 
 export function invocationConfig(
@@ -172,6 +177,7 @@ function parsePolicy(name: string, value: unknown, directory: string) {
     instructions: input.instructions === undefined ? undefined : BigInt(input.instructions),
     discord: input.discord ?? false,
     imports,
+    overrides: new Set(input.overrides ?? []),
     config: jsonObject(input.config, `policy '${name}' config`),
   };
 }

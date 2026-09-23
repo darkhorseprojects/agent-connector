@@ -53,6 +53,7 @@ policies:
     instructions: 200000000
     discord: true
     imports: {}
+    overrides: [parent, memory, run, models, retrieval]
     config:
       version: 1
       actor: "discord:${application}:${policy}:member:${member}:channel:${channel}"
@@ -90,7 +91,8 @@ member route. Configured channels receive ordinary messages directly; member and
 mention. Empty maps deny access.
 
 A newer request interrupts the same policy/member/channel request. Global concurrency and pending-request limits apply
-across message and command invocations.
+across message and command invocations. Absent operational settings default to concurrency 4, pending requests 32, a
+ten-minute lifetime, an 8 MiB loopback RPC limit, and 32 output messages.
 
 ## Per-call config
 
@@ -100,17 +102,19 @@ The registered command accepts a prompt and optional YAML object:
 /agent prompt:"Investigate this" config:"run: {quota_tokens: 12000}"
 ```
 
-Connector recursively overlays this object onto the policy config for that call. Objects merge; arrays, scalars, and
-`null` replace. Any config key may be changed. The selected Agent owns validation and meaning. The override is not
-persisted and never modifies `ac.yaml`.
+`overrides` explicitly grants caller control of the listed top-level config fields; absent fields are denied. Connector
+rejects any other caller key before recursively overlaying the object. Objects merge; arrays, scalars, and `null`
+replace. Trusted policy values such as the interpolated actor and selected preset remain sealed unless the operator
+explicitly grants those fields. Connector does not interpret the agent's config schema. The selected Agent owns
+validation and resource ceilings; the override is not persisted and never modifies `ac.yaml`.
 
 ## Output
 
-Connector renders complete `pa.emit(bytes)` messages, typed `pa.emit_delta` content/reasoning chunks, and the terminal
-Agent output as Markdown. It throttles edits to a live tail, never reflows completed messages, splits at paragraph
-boundaries, and attaches indivisible oversized blocks as UTF-8 text files. Mentions stay disabled and `output_messages`
-applies to attachments too. A final result that begins with already-rendered content contributes only its remaining
-footer.
+Connector renders complete `pa.emit(bytes)` messages, incremental `pa.emit(bytes, "append")` fragments, and the terminal
+Agent output as Markdown. Zinc owns any distinction between reasoning and content. Connector throttles edits to a live
+tail, never reflows completed messages, splits at paragraph boundaries, and attaches indivisible oversized blocks as
+UTF-8 text files. Mentions stay disabled and `output_messages` applies to attachments too. A final result that begins
+with already-rendered content contributes only its remaining footer.
 
 Each request gets a correlation ID before execution. Bounded metadata-only JSONL diagnostics (stage, elapsed time, error
 code; no prompts or tokens) are stored with mode `0600` under

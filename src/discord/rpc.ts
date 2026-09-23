@@ -35,15 +35,14 @@ const Request = Schema.Union([
 type RpcRequest = Schema.Schema.Type<typeof Request>;
 const decode = Schema.decodeUnknownSync(Request, { onExcessProperty: "error" });
 const encoder = new TextEncoder();
-const validLimit = (value?: number) => value === undefined || Number.isSafeInteger(value) && value > 0;
 
 export class DiscordRpcServer {
   readonly #grants = new Map<string, Grant>();
   readonly #server: Deno.HttpServer;
   readonly #url: string;
 
-  constructor(readonly rest: DiscordRest, readonly maximumBytes?: number) {
-    if (!validLimit(maximumBytes)) throw new RangeError("RPC limit must be positive");
+  constructor(readonly rest: DiscordRest, readonly maximumBytes: number) {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) throw new RangeError("RPC limit must be positive");
     this.#server = Deno.serve(
       { hostname: "127.0.0.1", port: 0, onListen: () => {} },
       (request) => this.#handle(request),
@@ -80,7 +79,7 @@ export class DiscordRpcServer {
     const raw = request.headers.get("content-length");
     if (!raw || !/^\d+$/.test(raw)) return reply(411, { error: "content-length is required" }, this.maximumBytes);
     const length = Number(raw);
-    if (!Number.isSafeInteger(length) || this.maximumBytes !== undefined && length > this.maximumBytes) {
+    if (!Number.isSafeInteger(length) || length > this.maximumBytes) {
       return reply(413, { error: "request exceeds byte limit" }, this.maximumBytes);
     }
     try {
@@ -88,14 +87,14 @@ export class DiscordRpcServer {
       let value: RpcRequest;
       try {
         value = decode(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
-      } catch (error) {
-        throw new RequestError(String(error));
+      } catch {
+        throw new RequestError("invalid Discord request");
       }
       if (!grant.active) throw new RequestError("grant is revoked");
       return reply(200, await this.#request(grant, value), this.maximumBytes);
     } catch (error) {
       return reply(error instanceof RequestError ? 400 : 502, {
-        error: error instanceof Error ? error.message : String(error),
+        error: error instanceof RequestError ? error.message : "Discord operation failed",
       }, this.maximumBytes);
     }
   }
@@ -174,13 +173,19 @@ export class DiscordRpcServer {
 }
 
 async function body(request: Request, expected: number): Promise<Uint8Array> {
-  const result = new Uint8Array(await request.arrayBuffer());
-  if (result.length !== expected) throw new RequestError("request length is invalid");
+  const result = new Uint8Array(expected);
+  let received = 0;
+  for await (const chunk of request.body ?? []) {
+    if (chunk.length > expected - received) throw new RequestError("request length is invalid");
+    result.set(chunk, received);
+    received += chunk.length;
+  }
+  if (received !== expected) throw new RequestError("request length is invalid");
   return result;
 }
 function decodeFiles(
   input: readonly Schema.Schema.Type<typeof File>[],
-  maximum?: number,
+  maximum: number,
 ): NonNullable<RestOptions["files"]> {
   if (input.length > 1) throw new RequestError("too many attachments");
   let bytes = 0;
@@ -192,7 +197,7 @@ function decodeFiles(
       throw new RequestError("file data is not base64");
     }
     bytes += data.length;
-    if (maximum !== undefined && bytes > maximum) throw new RequestError("attachments exceed configured byte limit");
+    if (bytes > maximum) throw new RequestError("attachments exceed configured byte limit");
     if (/[/\\\0\r\n]/.test(file.name)) throw new RequestError("file name is invalid");
     return file.contentType ? { data, name: file.name, contentType: file.contentType } : { data, name: file.name };
   });
@@ -200,8 +205,8 @@ function decodeFiles(
 function owned(grant: Grant, message: string): void {
   if (!grant.owned.has(message)) throw new RequestError("message is outside this grant");
 }
-function reply(status: number, value: unknown, maximum?: number): Response {
+function reply(status: number, value: unknown, maximum: number): Response {
   const bytes = encoder.encode(JSON.stringify(value));
-  if (maximum !== undefined && bytes.length > maximum) return new Response(null, { status: 502 });
+  if (bytes.length > maximum) return new Response(null, { status: 502 });
   return new Response(bytes, { status, headers: { "content-type": "application/json" } });
 }

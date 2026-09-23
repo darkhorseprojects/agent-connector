@@ -14,27 +14,52 @@ export type RenderTarget = Readonly<{ send(options: MessageOptions): Promise<Ren
 
 export class DiscordRenderer {
   readonly #stream = new DiscordMessageStream(LIMIT);
-  readonly #messages: RenderedMessage[] = [];
-  readonly #contents: DiscordChunk[] = [];
+  readonly #rendered: { message: RenderedMessage; chunk: DiscordChunk }[] = [];
+  #queued = "";
+  #shown = "";
+  #lastUpdate = 0;
 
   constructor(readonly target: RenderTarget, readonly maximum?: number) {}
 
-  async write(markdown: string): Promise<void> {
-    if (!markdown.trim()) return;
+  async append(text: string): Promise<void> {
+    if (!text) return;
+    this.#queued += text;
+    this.#shown += text;
+    if (!this.#lastUpdate || performance.now() - this.#lastUpdate >= 750) {
+      await this.#flushPending();
+      this.#lastUpdate = performance.now();
+    }
+  }
+
+  async write(text: string): Promise<void> {
+    await this.#flushPending();
     this.#stream.finish();
-    this.#stream.append(markdown);
+    this.#shown = "";
+    this.#lastUpdate = 0;
+    if (!text.trim()) return;
+    this.#stream.append(text);
     this.#stream.finish();
     await this.#flush();
   }
 
-  async delta(markdown: string): Promise<void> {
-    if (!markdown) return;
-    this.#stream.append(markdown);
-    await this.#flush();
+  async result(text: string): Promise<void> {
+    await this.#flushPending();
+    if (this.#shown && text.startsWith(this.#shown)) {
+      this.#stream.append(text.slice(this.#shown.length));
+    } else await this.write(text);
+    await this.finish();
   }
 
   async finish(): Promise<void> {
+    await this.#flushPending();
     this.#stream.finish();
+    await this.#flush();
+  }
+
+  async #flushPending(): Promise<void> {
+    if (!this.#queued) return;
+    this.#stream.append(this.#queued);
+    this.#queued = "";
     await this.#flush();
   }
 
@@ -45,14 +70,15 @@ export class DiscordRenderer {
     }
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index];
-      const previous = this.#contents[index];
+      const previous = this.#rendered[index];
       if (
-        previous?.content === chunk.content && previous.file?.length === chunk.file?.length &&
-        (!chunk.file || chunk.file.every((byte, offset) => byte === previous.file![offset]))
+        previous?.chunk.content === chunk.content && previous.chunk.file?.length === chunk.file?.length &&
+        (!chunk.file || chunk.file.every((byte, offset) => byte === previous.chunk.file![offset]))
       ) continue;
-      if (this.#messages[index]) await this.#messages[index].edit(options(chunk, true));
-      else this.#messages[index] = await this.target.send(options(chunk));
-      this.#contents[index] = chunk;
+      if (previous) {
+        await previous.message.edit(options(chunk, true));
+        previous.chunk = chunk;
+      } else this.#rendered.push({ message: await this.target.send(options(chunk)), chunk });
     }
   }
 }

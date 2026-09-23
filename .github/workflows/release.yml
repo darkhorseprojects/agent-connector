@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PORTABLE_AGENTS_COMMIT: 74b2c85c83c9734552b56d35aa9adebdb2b9c27f
+  PORTABLE_AGENTS_COMMIT: b5d591d7fd56211c397cef9d410a1455f7aa4731
 
 jobs:
   verify:

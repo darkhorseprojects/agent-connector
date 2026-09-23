@@ -16,7 +16,6 @@ import { type DiscordContext, type DiscordRest, DiscordRpcServer } from "./disco
 import { OperatorLog } from "./diagnostics.ts";
 import { route, type RoutedRequest, selectPolicy } from "./route.ts";
 
-const decoder = new TextDecoder("utf-8", { fatal: true });
 const attempt = <A>(work: () => Promise<A>) => Effect.tryPromise({ try: work, catch: (error) => error });
 type Work = Readonly<{
   id: string;
@@ -34,7 +33,8 @@ async function reportIncident(target: RenderTarget, id: string, error: unknown, 
     : error instanceof Error
     ? error.name
     : "UnknownFailure";
-  await log.record(id, "request.failed", undefined, code);
+  await log.record(id, "request.failed", undefined, code)
+    .catch(() => console.error(`[${id}] Operator log write failed`));
   console.error(`[${id}] Agent request failed: ${code}`);
   await target.send({ content: `Request failed. Incident: ${id}`, allowedMentions: { parse: [] } })
     .catch(() => console.error(`[${id}] Incident delivery failed`));
@@ -60,17 +60,15 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
     yield* Effect.promise(() => log.record("connector", "connector.started"));
     const fibers = yield* FiberMap.make<string>();
     const submit = yield* FiberMap.runtimePromise(fibers)<never>();
-    const semaphore = options.config.concurrency && Semaphore.makeUnsafe(options.config.concurrency);
+    const semaphore = Semaphore.makeUnsafe(options.config.concurrency);
 
     const enqueue = (key: string, work: Work) => {
       const pending = options.config.limits.pendingRequests;
-      if (pending && !FiberMap.hasUnsafe(fibers, key) && [...fibers].length >= pending) {
+      if (!FiberMap.hasUnsafe(fibers, key) && [...fibers].length >= pending) {
         void work.target.send({ content: "Agent queue is full. Try again later.", allowedMentions: { parse: [] } });
         return;
       }
-      let effect = task(work, options.config, rpc, log);
-      if (semaphore) effect = semaphore.withPermits(1)(effect);
-      const owned = effect.pipe(
+      const owned = semaphore.withPermits(1)(task(work, options.config, rpc, log)).pipe(
         Effect.scoped,
         Effect.matchEffect({
           onFailure: (error) =>
@@ -179,7 +177,7 @@ async function interactionWork(
   let override: Record<string, unknown> = {};
   try {
     const source = interaction.options.getString("config");
-    if (source) override = parseOverride(source);
+    if (source) override = parseOverride(source, config.policies[selected.policy].overrides);
   } catch (error) {
     await interaction.reply({ content: error instanceof Error ? error.message : String(error), ephemeral: true });
     return undefined;
@@ -229,12 +227,11 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
       )
       : undefined;
     const renderer = new DiscordRenderer(work.target, config.limits.outputMessages);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     const started = performance.now();
-    let queued = "";
-    let streamedContent = "";
-    let lastUpdate = 0;
+    let firstDelta = true;
     yield* Effect.promise(() => log.record(work.id, "request.started"));
-    let execution = runAgent({
+    const execution = runAgent({
       policy,
       policies: config.policies,
       context: work.context,
@@ -250,38 +247,24 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
           return Effect.promise(() => log.record(work.id, "lua.traceback", performance.now() - started));
         }
         return attempt(async () => {
-          const text = decoder.decode(event.output);
-          if (event.type === "delta") {
-            if (event.kind === "content") streamedContent += text;
-            queued += text;
-            if (!lastUpdate) await log.record(work.id, "model.first_delta", performance.now() - started);
-            if (!lastUpdate || performance.now() - lastUpdate >= 750) {
-              await renderer.delta(queued);
-              queued = "";
-              lastUpdate = performance.now();
+          let text: string;
+          if (event.type === "append") text = decoder.decode(event.output, { stream: true });
+          else {
+            decoder.decode();
+            text = decoder.decode(event.output);
+          }
+          if (event.type === "append") {
+            if (firstDelta) {
+              firstDelta = false;
+              await log.record(work.id, "model.first_delta", performance.now() - started);
             }
-            return;
-          }
-          if (queued) {
-            await renderer.delta(queued);
-            queued = "";
-          }
-          if (event.type === "result") {
-            if (streamedContent && text.startsWith(streamedContent)) {
-              await renderer.delta(text.slice(streamedContent.length));
-            } else {
-              await renderer.write(text);
-            }
-            await renderer.finish();
-          } else {
-            await renderer.write(text);
-            streamedContent = "";
-          }
+            await renderer.append(text);
+          } else if (event.type === "result") await renderer.result(text);
+          else await renderer.write(text);
         });
       }),
     );
-    if (config.limits.lifetimeMs !== undefined) execution = execution.pipe(Effect.timeout(config.limits.lifetimeMs));
-    yield* execution;
+    yield* execution.pipe(Effect.timeout(config.limits.lifetimeMs));
     yield* Effect.promise(() => log.record(work.id, "request.completed", performance.now() - started));
   });
 }
