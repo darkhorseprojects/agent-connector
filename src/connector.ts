@@ -19,7 +19,6 @@ import { route, type RoutedRequest, selectPolicy } from "./route.ts";
 const attempt = <A>(work: () => Promise<A>) => Effect.tryPromise({ try: work, catch: (error) => error });
 type Work = Readonly<{
   id: string;
-  policy: string;
   input: string;
   override: Readonly<Record<string, unknown>>;
   context: InvocationContext;
@@ -62,7 +61,8 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
     const submit = yield* FiberMap.runtimePromise(fibers)<never>();
     const semaphore = Semaphore.makeUnsafe(options.config.concurrency);
 
-    const enqueue = (key: string, work: Work) => {
+    const enqueue = (work: Work) => {
+      const key = JSON.stringify([work.context.policy, work.context.member, work.context.channel]);
       const pending = options.config.limits.pendingRequests;
       if (!FiberMap.hasUnsafe(fibers, key) && [...fibers].length >= pending) {
         void work.target.send({ content: "Agent queue is full. Try again later.", allowedMentions: { parse: [] } });
@@ -84,14 +84,14 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
       if (!request) return;
       const id = crypto.randomUUID();
       void messageWork(message, request, options.config, id).then((work) => {
-        if (work) enqueue(JSON.stringify([work.policy, work.context.member, work.context.channel]), work);
+        if (work) enqueue(work);
       }).catch((error) => reportIncident(message.channel as unknown as RenderTarget, id, error, log));
     };
     const receiveInteraction = (interaction: ChatInputCommandInteraction) => {
       if (interaction.commandName !== "agent") return;
       const id = crypto.randomUUID();
       void interactionWork(interaction, options.config, id).then((work) => {
-        if (work) enqueue(JSON.stringify([work.policy, work.context.member, work.context.channel]), work);
+        if (work) enqueue(work);
       }).catch((error) => {
         void log.record(id, "interaction.failed", undefined, error instanceof Error ? error.name : "UnknownFailure");
         console.error(`[${id}] Discord command handling failed`);
@@ -129,28 +129,27 @@ async function messageWork(
     });
   }
   if (!target.isSendable()) return undefined;
-  const channel = target.id;
+  const context: InvocationContext = {
+    application: config.identity.application,
+    policy: request.policy,
+    member: message.author.id,
+    channel: target.id,
+    guild: message.guildId ?? undefined,
+    message: message.id,
+  };
   return {
     id,
-    policy: request.policy,
     input: request.input,
     override: {},
-    context: {
-      application: config.identity.application,
-      policy: request.policy,
-      member: message.author.id,
-      channel,
-      guild: message.guildId ?? undefined,
-      message: message.id,
-    },
+    context,
     grant: {
-      policy: request.policy,
-      memberId: message.author.id,
-      messageId: message.id,
+      policy: context.policy,
+      memberId: context.member,
+      messageId: context.message,
       messageChannelId: message.channelId,
-      channelId: channel,
+      channelId: context.channel,
       parentChannelId: target.isThread() ? target.parentId ?? undefined : undefined,
-      guildId: message.guildId ?? undefined,
+      guildId: context.guild,
     },
     target: target as unknown as RenderTarget,
   };
@@ -193,25 +192,25 @@ async function interactionWork(
       return await interaction.followUp(message);
     },
   };
+  const context: InvocationContext = {
+    application: config.identity.application,
+    policy: selected.policy,
+    member,
+    channel: interaction.channelId,
+    guild: interaction.guildId ?? undefined,
+    message: interaction.id,
+  };
   return {
     id,
-    policy: selected.policy,
     input,
     override,
-    context: {
-      application: config.identity.application,
-      policy: selected.policy,
-      member,
-      channel: interaction.channelId,
-      guild: interaction.guildId ?? undefined,
-      message: interaction.id,
-    },
+    context,
     grant: {
-      policy: selected.policy,
-      memberId: member,
-      channelId: interaction.channelId,
+      policy: context.policy,
+      memberId: context.member,
+      channelId: context.channel,
       parentChannelId: parent,
-      guildId: interaction.guildId ?? undefined,
+      guildId: context.guild,
     },
     target,
   };
@@ -219,7 +218,7 @@ async function interactionWork(
 
 function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: OperatorLog) {
   return Effect.gen(function* () {
-    const policy = config.policies[work.policy];
+    const policy = config.policies[work.context.policy];
     const grant = policy.discord
       ? yield* Effect.acquireRelease(
         Effect.sync(() => rpc.grant(work.grant)),

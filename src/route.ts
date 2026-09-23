@@ -8,7 +8,8 @@ export type RoutedRequest = Readonly<{
 }>;
 
 export function stripBotMention(content: string, botId: string): string | null {
-  return new RegExp(`<@!?${botId}>`).test(content) ? content.replace(new RegExp(`<@!?${botId}>`), "") : null;
+  const mention = new RegExp(`<@!?${botId}>`);
+  return mention.test(content) ? content.replace(mention, "") : null;
 }
 
 export function selectPolicy(

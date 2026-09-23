@@ -15,7 +15,6 @@ export type RenderTarget = Readonly<{ send(options: MessageOptions): Promise<Ren
 export class DiscordRenderer {
   readonly #stream = new DiscordMessageStream(LIMIT);
   readonly #rendered: { message: RenderedMessage; chunk: DiscordChunk }[] = [];
-  #queued = "";
   #shown = "";
   #lastUpdate = 0;
 
@@ -23,16 +22,16 @@ export class DiscordRenderer {
 
   async append(text: string): Promise<void> {
     if (!text) return;
-    this.#queued += text;
+    this.#stream.append(text);
     this.#shown += text;
     if (!this.#lastUpdate || performance.now() - this.#lastUpdate >= 750) {
-      await this.#flushPending();
+      await this.#flush();
       this.#lastUpdate = performance.now();
     }
   }
 
   async write(text: string): Promise<void> {
-    await this.#flushPending();
+    await this.#flush();
     this.#stream.finish();
     this.#shown = "";
     this.#lastUpdate = 0;
@@ -43,7 +42,7 @@ export class DiscordRenderer {
   }
 
   async result(text: string): Promise<void> {
-    await this.#flushPending();
+    await this.#flush();
     if (this.#shown && text.startsWith(this.#shown)) {
       this.#stream.append(text.slice(this.#shown.length));
     } else await this.write(text);
@@ -51,15 +50,8 @@ export class DiscordRenderer {
   }
 
   async finish(): Promise<void> {
-    await this.#flushPending();
-    this.#stream.finish();
     await this.#flush();
-  }
-
-  async #flushPending(): Promise<void> {
-    if (!this.#queued) return;
-    this.#stream.append(this.#queued);
-    this.#queued = "";
+    this.#stream.finish();
     await this.#flush();
   }
 
