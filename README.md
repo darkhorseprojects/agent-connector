@@ -106,9 +106,18 @@ persisted and never modifies `ac.yaml`.
 
 ## Output
 
-Connector uses PA protocol 1 streaming. Every `pa.emit(bytes)` frame and the terminal Agent output are treated as
-Markdown and rendered immediately in order. Connector only splits Discord messages safely, preserves fenced blocks,
-disables mentions, and enforces `output_messages`; it defines no reasoning, tool, Store, or continuation schema.
+Connector renders complete `pa.emit(bytes)` messages, typed `pa.emit_delta` content/reasoning chunks, and the terminal
+Agent output as Markdown. It throttles edits to a live tail, never reflows completed messages, splits at paragraph
+boundaries, and attaches indivisible oversized blocks as UTF-8 text files. Mentions stay disabled and `output_messages`
+applies to attachments too. A final result that begins with already-rendered content contributes only its remaining
+footer.
+
+Each request gets a correlation ID before execution. Bounded metadata-only JSONL diagnostics (stage, elapsed time, error
+code; no prompts or tokens) are stored with mode `0600` under
+`${XDG_STATE_HOME:-$HOME/.local/state}/agent-connector/requests.jsonl` on Linux,
+`$HOME/Library/Logs/agent-connector/requests.jsonl` on macOS, or `%LOCALAPPDATA%\\agent-connector\\requests.jsonl` on
+Windows. The file rotates at 8 MiB and retains one previous file. Discord sees only the incident ID, never a Lua
+traceback.
 
 Agents invoked through final-only `Agent.call` can use `pa.emit` safely because it is a no-op when emissions are
 disabled.
@@ -117,7 +126,9 @@ disabled.
 
 `packages/discord/discord.md` is an optional PA Import that proxies scoped Discord operations for Lua. Its loopback
 grant permits reads in the selected channel, creation of messages, edits/deletes of grant-created messages, reactions to
-the triggering or grant-created message, and bounded attachments. Revocation prevents new calls.
+any explicit message ID in that channel (plus the triggering message in its original channel), and bounded attachments.
+Discord validates channel-scoped reaction targets; the grant does not authorize other channels. Revocation prevents new
+calls.
 
 PA exposes native Import members via `require`. Zinc reads each Import's `document()` member when building the model
 prompt:
@@ -129,8 +140,9 @@ return id
 ```
 
 Other members include `context()`, `list_messages(limit?, before?)`, `get_message(id)`, `edit_message(id, content)`,
-`delete_message(id)`, and reactions. `create_message(content?, filename?, bytes?, content_type?)` accepts one attachment
-using raw bytes. JSON exists only inside the scoped loopback RPC transport.
+`delete_message(id)`, and reactions. Lists default to 20 (maximum 50) compact summaries with at most 300 content
+characters each; use `get_message(id)` for a full message. `create_message(content?, filename?, bytes?, content_type?)`
+accepts one attachment using raw bytes. JSON exists only inside the scoped loopback RPC transport.
 
 ## Development
 

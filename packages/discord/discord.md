@@ -38,14 +38,16 @@ local entry = {}
 function entry.document()
     return [[local discord = require("discord")
 discord.context() -> {policy,memberId,channelId,messageId?,messageChannelId?,parentChannelId?,guildId?}
-discord.list_messages(limit?,before?) -> messages
+discord.list_messages(limit?,before?) -> {id,author={id,username},content,truncated}[]; default 20, maximum 50; content at most 300 characters
 discord.get_message(message_id) -> message
 discord.create_message(content?,filename?,bytes?,content_type?) -> message_id
 discord.edit_message(message_id,content) -> true
 discord.delete_message(message_id) -> true
 discord.add_reaction(message_id,emoji) -> true
 discord.remove_reaction(message_id,emoji) -> true
-Messages and context are Lua tables; IDs and emoji are strings. An attachment uses one filename and raw byte string.]]
+Messages and context are Lua tables; IDs and emoji are strings. An attachment uses one filename and raw byte string.
+Use get_message(id) to read a full message. Reactions accept an explicit message ID in the granted channel (or the triggering message in its original channel).
+Editing and deleting remain limited to messages created by this invocation.]]
 end
 
 function entry.context(config)

@@ -17,7 +17,7 @@ const Id = Schema.String.check(Schema.isPattern(/^\d{17,20}$/));
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/^[^\0]+$/));
 const Content = Text.check(Schema.isMaxLength(2000));
 const File = Schema.Struct({ name: Text, data: Text, contentType: Schema.optional(Text) });
-const Limit = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 100 }));
+const Limit = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 50 }));
 const Request = Schema.Union([
   Schema.Struct({ type: Schema.Literal("context") }),
   Schema.Struct({ type: Schema.Literal("listMessages"), limit: Schema.optional(Limit), before: Schema.optional(Id) }),
@@ -106,9 +106,29 @@ export class DiscordRpcServer {
       case "context":
         return grant.context;
       case "listMessages": {
-        const query = new URLSearchParams({ limit: String(request.limit ?? 50) });
+        const query = new URLSearchParams({ limit: String(request.limit ?? 20) });
         if (request.before) query.set("before", request.before);
-        return await this.rest.get(`${channel}/messages`, { query });
+        const messages = await this.rest.get(`${channel}/messages`, { query });
+        if (!Array.isArray(messages)) throw new Error("Discord list response is invalid");
+        return messages.map((item: unknown) => {
+          if (
+            !item || typeof item !== "object" || !("id" in item) || !("content" in item) ||
+            !("author" in item) || !item.author || typeof item.author !== "object" ||
+            !("id" in item.author) || !("username" in item.author) ||
+            typeof item.id !== "string" || typeof item.content !== "string" ||
+            typeof item.author.id !== "string" || typeof item.author.username !== "string"
+          ) {
+            throw new Error("Discord message is invalid");
+          }
+          const content = item.content.slice(0, 300);
+          const end = /[\uD800-\uDBFF]$/.test(content) ? content.slice(0, -1) : content;
+          return {
+            id: item.id,
+            author: { id: item.author.id, username: item.author.username },
+            content: end,
+            truncated: end.length < item.content.length,
+          };
+        });
       }
       case "getMessage":
         return await this.rest.get(`${channel}/messages/${request.message}`);
@@ -139,9 +159,6 @@ export class DiscordRpcServer {
       }
       case "addReaction":
       case "removeReaction": {
-        if (!grant.owned.has(request.message) && request.message !== grant.context.messageId) {
-          throw new RequestError("message is outside this grant");
-        }
         const target = request.message === grant.context.messageId
           ? grant.context.messageChannelId!
           : grant.context.channelId;

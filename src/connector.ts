@@ -13,11 +13,13 @@ import { type ConnectorConfig, type InvocationContext, parseOverride } from "./c
 import { deriveThreadTitle } from "./discord/format.ts";
 import { DiscordRenderer, type RenderTarget } from "./discord/renderer.ts";
 import { type DiscordContext, type DiscordRest, DiscordRpcServer } from "./discord/rpc.ts";
+import { OperatorLog } from "./diagnostics.ts";
 import { route, type RoutedRequest, selectPolicy } from "./route.ts";
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const attempt = <A>(work: () => Promise<A>) => Effect.tryPromise({ try: work, catch: (error) => error });
 type Work = Readonly<{
+  id: string;
   policy: string;
   input: string;
   override: Readonly<Record<string, unknown>>;
@@ -26,11 +28,16 @@ type Work = Readonly<{
   target: RenderTarget;
 }>;
 
-async function reportIncident(target: RenderTarget, error: unknown): Promise<void> {
-  const incident = crypto.randomUUID().slice(0, 8);
-  console.error(`[${incident}] Agent request failed:`, error);
-  await target.send({ content: `Request failed. Incident: ${incident}`, allowedMentions: { parse: [] } })
-    .catch((delivery) => console.error(`[${incident}] Incident delivery failed:`, delivery));
+async function reportIncident(target: RenderTarget, id: string, error: unknown, log: OperatorLog): Promise<void> {
+  const code = error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
+    : error instanceof Error
+    ? error.name
+    : "UnknownFailure";
+  await log.record(id, "request.failed", undefined, code);
+  console.error(`[${id}] Agent request failed: ${code}`);
+  await target.send({ content: `Request failed. Incident: ${id}`, allowedMentions: { parse: [] } })
+    .catch(() => console.error(`[${id}] Incident delivery failed`));
 }
 
 export function runConnector(options: { token: string; config: ConnectorConfig }) {
@@ -49,6 +56,8 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
       Effect.sync(() => new DiscordRpcServer(client.rest as unknown as DiscordRest, options.config.limits.rpcBytes)),
       (rpc) => Effect.promise(() => rpc.close()),
     );
+    const log = new OperatorLog();
+    yield* Effect.promise(() => log.record("connector", "connector.started"));
     const fibers = yield* FiberMap.make<string>();
     const submit = yield* FiberMap.runtimePromise(fibers)<never>();
     const semaphore = options.config.concurrency && Semaphore.makeUnsafe(options.config.concurrency);
@@ -59,31 +68,36 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
         void work.target.send({ content: "Agent queue is full. Try again later.", allowedMentions: { parse: [] } });
         return;
       }
-      let effect = task(work, options.config, rpc);
+      let effect = task(work, options.config, rpc, log);
       if (semaphore) effect = semaphore.withPermits(1)(effect);
       const owned = effect.pipe(
         Effect.scoped,
         Effect.matchEffect({
           onFailure: (error) =>
-            attempt(() => reportIncident(work.target, error)).pipe(Effect.orElseSucceed(() => undefined)),
+            attempt(() => reportIncident(work.target, work.id, error, log)).pipe(Effect.orElseSucceed(() => undefined)),
           onSuccess: () => Effect.void,
         }),
       );
-      void submit(key, owned).catch((error) => console.error("Discord request handling failed:", error));
+      void submit(key, owned).catch(() => console.error("Discord request handling failed"));
     };
 
     const receiveMessage = (message: Message) => {
       const request = route(options.config, message);
       if (!request) return;
-      void messageWork(message, request, options.config).then((work) => {
+      const id = crypto.randomUUID();
+      void messageWork(message, request, options.config, id).then((work) => {
         if (work) enqueue(JSON.stringify([work.policy, work.context.member, work.context.channel]), work);
-      }).catch((error) => reportIncident(message.channel as unknown as RenderTarget, error));
+      }).catch((error) => reportIncident(message.channel as unknown as RenderTarget, id, error, log));
     };
     const receiveInteraction = (interaction: ChatInputCommandInteraction) => {
       if (interaction.commandName !== "agent") return;
-      void interactionWork(interaction, options.config).then((work) => {
+      const id = crypto.randomUUID();
+      void interactionWork(interaction, options.config, id).then((work) => {
         if (work) enqueue(JSON.stringify([work.policy, work.context.member, work.context.channel]), work);
-      }).catch((error) => console.error("Discord command handling failed:", error));
+      }).catch((error) => {
+        void log.record(id, "interaction.failed", undefined, error instanceof Error ? error.name : "UnknownFailure");
+        console.error(`[${id}] Discord command handling failed`);
+      });
     };
     client.on(Events.MessageCreate, receiveMessage);
     client.on(Events.InteractionCreate, (interaction) => {
@@ -105,6 +119,7 @@ async function messageWork(
   message: Message,
   request: RoutedRequest,
   config: ConnectorConfig,
+  id: string,
 ): Promise<Work | undefined> {
   let target: TextBasedChannel = message.channel;
   if (request.createThread) {
@@ -118,6 +133,7 @@ async function messageWork(
   if (!target.isSendable()) return undefined;
   const channel = target.id;
   return {
+    id,
     policy: request.policy,
     input: request.input,
     override: {},
@@ -145,6 +161,7 @@ async function messageWork(
 async function interactionWork(
   interaction: ChatInputCommandInteraction,
   config: ConnectorConfig,
+  id: string,
 ): Promise<Work | undefined> {
   const channel = interaction.channel;
   const member = interaction.user.id;
@@ -179,6 +196,7 @@ async function interactionWork(
     },
   };
   return {
+    id,
     policy: selected.policy,
     input,
     override,
@@ -201,7 +219,7 @@ async function interactionWork(
   };
 }
 
-function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer) {
+function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: OperatorLog) {
   return Effect.gen(function* () {
     const policy = config.policies[work.policy];
     const grant = policy.discord
@@ -211,6 +229,11 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer) {
       )
       : undefined;
     const renderer = new DiscordRenderer(work.target, config.limits.outputMessages);
+    const started = performance.now();
+    let queued = "";
+    let streamedContent = "";
+    let lastUpdate = 0;
+    yield* Effect.promise(() => log.record(work.id, "request.started"));
     let execution = runAgent({
       policy,
       policies: config.policies,
@@ -219,9 +242,46 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer) {
       override: work.override,
       discord: grant,
     }).pipe(
-      Stream.runForEach((event) => attempt(() => renderer.write(decoder.decode(event.output)))),
+      Stream.runForEach((event) => {
+        if (event.type === "log") {
+          return Effect.promise(() => log.record(work.id, event.stage, performance.now() - started));
+        }
+        if (event.type === "traceback") {
+          return Effect.promise(() => log.record(work.id, "lua.traceback", performance.now() - started));
+        }
+        return attempt(async () => {
+          const text = decoder.decode(event.output);
+          if (event.type === "delta") {
+            if (event.kind === "content") streamedContent += text;
+            queued += text;
+            if (!lastUpdate) await log.record(work.id, "model.first_delta", performance.now() - started);
+            if (!lastUpdate || performance.now() - lastUpdate >= 750) {
+              await renderer.delta(queued);
+              queued = "";
+              lastUpdate = performance.now();
+            }
+            return;
+          }
+          if (queued) {
+            await renderer.delta(queued);
+            queued = "";
+          }
+          if (event.type === "result") {
+            if (streamedContent && text.startsWith(streamedContent)) {
+              await renderer.delta(text.slice(streamedContent.length));
+            } else {
+              await renderer.write(text);
+            }
+            await renderer.finish();
+          } else {
+            await renderer.write(text);
+            streamedContent = "";
+          }
+        });
+      }),
     );
     if (config.limits.lifetimeMs !== undefined) execution = execution.pipe(Effect.timeout(config.limits.lifetimeMs));
     yield* execution;
+    yield* Effect.promise(() => log.record(work.id, "request.completed", performance.now() - started));
   });
 }
