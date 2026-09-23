@@ -54,6 +54,19 @@ Their exact versions and integrity hashes are recorded in `deno.lock`.
 - License: MIT
 - Source: https://github.com/Effect-TS/effect
 
+## Lua 5.5
+
+- Copyright (C) 1994-2025 Lua.org, PUC-Rio
+- License: MIT
+- Source and license: https://www.lua.org/license.html
+
+## lunajson
+
+- Version: 1.2.3
+- Copyright (C) Shunsuke Shimizu and contributors
+- License: MIT
+- Source: https://github.com/grafi-tt/lunajson/tree/1.2.3
+
 ## keyring
 
 - Package: `@napi-rs/keyring` and its platform binary package

@@ -5,7 +5,7 @@ export type DiscordContext = Readonly<
   & Record<ContextField, string>
   & Partial<Record<"messageId" | "messageChannelId" | "parentChannelId" | "guildId", string>>
 >;
-export type DiscordGrant = Readonly<{ config: string; description: string; revoke: () => void }>;
+export type DiscordGrant = Readonly<{ config: string; revoke: () => void }>;
 type RestFile = Readonly<{ data: Uint8Array; name: string; contentType?: string }>;
 type RestOptions = Readonly<{ body?: unknown; query?: URLSearchParams; files?: readonly RestFile[] }>;
 type Method = "get" | "post" | "put" | "patch" | "delete";
@@ -19,6 +19,7 @@ const Content = Text.check(Schema.isMaxLength(2000));
 const File = Schema.Struct({ name: Text, data: Text, contentType: Schema.optional(Text) });
 const Limit = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 100 }));
 const Request = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("context") }),
   Schema.Struct({ type: Schema.Literal("listMessages"), limit: Schema.optional(Limit), before: Schema.optional(Id) }),
   Schema.Struct({ type: Schema.Literal("getMessage"), message: Id }),
   Schema.Struct({
@@ -56,10 +57,6 @@ export class DiscordRpcServer {
     this.#grants.set(token, grant);
     return Object.freeze({
       config: `${this.#url}\0${token}`,
-      description: `Discord channel capability. Context: ${JSON.stringify(grant.context)}. ` +
-        "Requests: {type:'listMessages',limit?,before?}, {type:'getMessage',message}, " +
-        "{type:'createMessage',content?,files?}, {type:'editMessage',message,content}, " +
-        "{type:'deleteMessage',message}, and reaction requests with message and emoji.",
       revoke: () => {
         grant.active = false;
         this.#grants.delete(token);
@@ -106,6 +103,8 @@ export class DiscordRpcServer {
   async #request(grant: Grant, request: RpcRequest): Promise<unknown> {
     const channel = `/channels/${grant.context.channelId}`;
     switch (request.type) {
+      case "context":
+        return grant.context;
       case "listMessages": {
         const query = new URLSearchParams({ limit: String(request.limit ?? 50) });
         if (request.before) query.set("before", request.before);
@@ -166,7 +165,7 @@ function decodeFiles(
   input: readonly Schema.Schema.Type<typeof File>[],
   maximum?: number,
 ): NonNullable<RestOptions["files"]> {
-  if (input.length > 10) throw new RequestError("too many attachments");
+  if (input.length > 1) throw new RequestError("too many attachments");
   let bytes = 0;
   return input.map((file) => {
     let data: Uint8Array;

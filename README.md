@@ -6,8 +6,8 @@ Agent bytes as Discord Markdown.
 
 ## Install
 
-Install `agc` and `agent` into an executable directory. Install `dist/packages` into the per-user application-data
-directory:
+Install `agc`, `agent`, and the included Lua 5.5 shared library into the same executable directory. PA locates that
+library through a platform-relative loader path. Install `dist/packages` into the per-user application-data directory:
 
 ```text
 Linux:  ${XDG_DATA_HOME:-$HOME/.local/share}/agent-connector/packages
@@ -51,35 +51,20 @@ policies:
     entry: zinc
     memory_bytes: 100663296
     instructions: 200000000
-    environment:
-      - HOME
-      - LUA_PATH
-      - LUA_CPATH
-      - LD_LIBRARY_PATH
-      - DYLD_LIBRARY_PATH
-      - PATH
-      - SystemRoot
     discord: true
     imports: {}
     config:
       version: 1
       actor: "discord:${application}:${policy}:member:${member}:channel:${channel}"
       preset: safe
-      quota: null
-      imports:
-        discord: >-
-          Discord capability for channel ${channel} and triggering message ${message}. Use
-          self.agents.discord.call(request). Requests are Lua tables: {type="listMessages",limit?,before?},
-          {type="getMessage",message=ID}, {type="createMessage",content?,files?},
-          {type="editMessage",message=ID,content=TEXT}, {type="deleteMessage",message=ID},
-          {type="addReaction",message=ID,emoji=EMOJI}, or {type="removeReaction",message=ID,emoji=EMOJI}.
 members: {}
 channels: {}
 guilds: {}
 ```
 
-`directory` is optional and defaults to the directory containing `ac.yaml`; `source` is relative to it. Only listed
-environment variables are copied into the exact Agent process environment. `AGENT_CONNECTOR_*` names are reserved.
+`directory` is optional and defaults to the directory containing `ac.yaml`; `source` is relative to it. PA owns Lua
+dependency discovery. Connector passes the platform home directory (and Windows `SystemRoot`) to its exact Agent child
+environment; users do not set Lua loader variables.
 
 Config strings may use `${application}`, `${policy}`, `${member}`, `${channel}`, `${guild}`, and `${message}`. Connector
 expands strings but does not interpret the resulting agent config.
@@ -95,7 +80,8 @@ imports:
 ```
 
 The edge config recursively overlays the imported policy's config. `discord: true` separately supplies the built-in
-Import named `discord`; it does not modify the agent's opaque config or its own `imports` field.
+Import named `discord`; it does not modify the agent's opaque config. An agent can inspect its PA grants with
+`pa.imports()`.
 
 ## Routing
 
@@ -111,7 +97,7 @@ across message and command invocations.
 The registered command accepts a prompt and optional YAML object:
 
 ```text
-/agent prompt:"Investigate this" config:"quota: 12000"
+/agent prompt:"Investigate this" config:"run: {quota_tokens: 12000}"
 ```
 
 Connector recursively overlays this object onto the policy config for that call. Objects merge; arrays, scalars, and
@@ -133,12 +119,18 @@ disabled.
 grant permits reads in the selected channel, creation of messages, edits/deletes of grant-created messages, reactions to
 the triggering or grant-created message, and bounded attachments. Revocation prevents new calls.
 
-An agent decides how to expose the Import. Zinc exposes configured Imports to generated Lua as:
+PA exposes native Import members via `require`. Zinc reads each Import's `document()` member when building the model
+prompt:
 
 ```lua
-local result = self.agents.discord.call({ type = "createMessage", content = "hello" })
-return result.id
+local discord = require("discord")
+local id = discord.create_message("hello")
+return id
 ```
+
+Other members include `context()`, `list_messages(limit?, before?)`, `get_message(id)`, `edit_message(id, content)`,
+`delete_message(id)`, and reactions. `create_message(content?, filename?, bytes?, content_type?)` accepts one attachment
+using raw bytes. JSON exists only inside the scoped loopback RPC transport.
 
 ## Development
 
@@ -152,7 +144,7 @@ deno task check
 deno task compile
 ```
 
-Standalone compilation embeds the native keyring addon and requires FFI permission. Zinc additionally needs
-ABI-compatible Lua 5.5 and its Lua/native module paths in the selected environment.
+Standalone compilation embeds the native keyring addon and requires FFI permission. PA and package native modules
+require ABI-compatible dynamic Lua 5.5; PA resolves package modules without Lua search-path environment variables.
 
 License: AGPL-3.0-only.

@@ -6,6 +6,11 @@ const portableRoot = fromFileUrl(new URL("../../portable-agents", import.meta.ur
 const executableName = Deno.build.os === "windows" ? "agent.exe" : "agent";
 const output = join(root, "dist", Deno.build.os === "windows" ? "agc.exe" : "agc");
 const agentOutput = join(root, "dist", executableName);
+const luaLibrary = Deno.build.os === "windows"
+  ? "lua5.5.dll"
+  : Deno.build.os === "darwin"
+  ? "liblua5.5.dylib"
+  : "liblua.so.5.5";
 
 await Deno.remove(join(root, "dist"), { recursive: true }).catch((error) => {
   if (!(error instanceof Deno.errors.NotFound)) throw error;
@@ -32,6 +37,7 @@ const status = await new Deno.Command(Deno.execPath(), {
 }).output();
 if (!status.success) throw new Error(`deno compile failed with status ${status.code}`);
 await copy(join(portableRoot, "zig-out", "bin", executableName), agentOutput);
+await copy(join(portableRoot, "zig-out", "bin", luaLibrary), join(root, "dist", luaLibrary));
 await copy(join(portableRoot, "LICENSE"), join(root, "dist", "PORTABLE_AGENTS_LICENSE"));
 await copy(join(root, "packages"), join(root, "dist", "packages"));
 await copy(join(root, "packaging"), join(root, "dist", "packaging"));
@@ -42,6 +48,7 @@ for (
   const path of [
     output,
     agentOutput,
+    join(root, "dist", luaLibrary),
     join(root, "dist", "packages", "discord", "discord.md"),
     join(root, "dist", "LICENSE"),
     join(root, "dist", "README.md"),

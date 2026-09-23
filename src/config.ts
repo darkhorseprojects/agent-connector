@@ -3,7 +3,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from "@std/yaml";
 import { Schema } from "effect";
 
 const snowflake = /^\d{17,20}$/;
-const variable = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const moduleName = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/^[^\0]+$/));
 const Positive = Schema.Number.check(
@@ -27,7 +26,6 @@ const PolicySource = Schema.Struct({
   entry: Text,
   memory_bytes: Positive,
   instructions: Schema.optional(Positive),
-  environment: Schema.optional(Schema.Array(Text)),
   discord: Schema.optional(Schema.Boolean),
   imports: Schema.optional(Schema.Record(Schema.String, ImportSource)),
   config: Schema.Record(Schema.String, Schema.Unknown),
@@ -154,15 +152,6 @@ function parsePolicy(name: string, value: unknown, directory: string) {
   const input = decodePolicy(value);
   if (!moduleName.test(input.entry) || input.entry === "pa") throw new TypeError(`policy '${name}' entry is invalid`);
   const source = relativePath(input.source, `policy '${name}' source`);
-  const environment: string[] = [];
-  const names = new Set<string>();
-  for (const variableName of input.environment ?? []) {
-    if (
-      !variable.test(variableName) || /^AGENT_CONNECTOR_/i.test(variableName) || names.has(variableName.toLowerCase())
-    ) throw new TypeError(`policy '${name}' environment is invalid`);
-    names.add(variableName.toLowerCase());
-    environment.push(variableName);
-  }
   const imports: Record<string, { policy: string; config: Record<string, unknown> }> = Object.create(null);
   for (const [importName, imported] of Object.entries(input.imports ?? {})) {
     imports[importName] = {
@@ -181,7 +170,6 @@ function parsePolicy(name: string, value: unknown, directory: string) {
     entryModule: input.entry,
     memoryBytes: input.memory_bytes,
     instructions: input.instructions === undefined ? undefined : BigInt(input.instructions),
-    environment,
     discord: input.discord ?? false,
     imports,
     config: jsonObject(input.config, `policy '${name}' config`),
