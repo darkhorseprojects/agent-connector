@@ -62,6 +62,7 @@ Their exact versions and integrity hashes are recorded in `deno.lock`.
 
 ## lunajson
 
+- Bundled components: `lunajson/encoder.lua`, `lunajson/decoder.lua`
 - Version: 1.2.3
 - Copyright (C) Shunsuke Shimizu and contributors
 - License: MIT

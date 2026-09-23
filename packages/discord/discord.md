@@ -1,7 +1,8 @@
 # Discord
 
 ```lua
-local json = require("lunajson")
+local encode = require("lunajson.encoder")()
+local decode = require("lunajson.decoder")()
 local pa = require("pa")
 
 local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -23,13 +24,13 @@ local function request(value, config)
     local separator = assert(config:find("\0", 1, true), "invalid Discord config")
     local origin, token = config:sub(1, separator - 1), config:sub(separator + 1)
     assert(origin ~= "" and token ~= "" and not token:find("\0", 1, true), "invalid Discord config")
-    local status, body = pa.http(origin, "POST", "/v1/request", json.encode(value), {
+    local status, body = pa.http(origin, "POST", "/v1/request", encode(value), {
         authorization = "Bearer " .. token,
         ["content-type"] = "application/json",
         accept = "application/json",
     })
     assert(status >= 200 and status < 300, body)
-    return json.decode(body)
+    return decode(body)
 end
 
 local entry = {}
