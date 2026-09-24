@@ -1,12 +1,9 @@
-import { Buffer } from "node:buffer";
 import { type DiscordChunk, DiscordMessageStream } from "./format.ts";
 
 const LIMIT = 2000;
-const options = (chunk: DiscordChunk, edit = false) => ({
+const options = (chunk: DiscordChunk) => ({
   content: chunk.content,
   allowedMentions: { parse: [] as never[] },
-  ...(chunk.file ? { files: [{ attachment: Buffer.from(chunk.file), name: "agent-output.txt" }] } : {}),
-  ...(edit ? { attachments: [] } : {}),
 });
 type MessageOptions = ReturnType<typeof options>;
 type RenderedMessage = Readonly<{ edit(options: MessageOptions): Promise<unknown> }>;
@@ -60,12 +57,9 @@ export class DiscordRenderer {
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index];
       const previous = this.#rendered[index];
-      if (
-        previous?.chunk.content === chunk.content && previous.chunk.file?.length === chunk.file?.length &&
-        (!chunk.file || chunk.file.every((byte, offset) => byte === previous.chunk.file![offset]))
-      ) continue;
+      if (previous?.chunk.content === chunk.content) continue;
       if (previous) {
-        await previous.message.edit(options(chunk, true));
+        await previous.message.edit(options(chunk));
         previous.chunk = chunk;
       } else this.#rendered.push({ message: await this.target.send(options(chunk)), chunk });
     }

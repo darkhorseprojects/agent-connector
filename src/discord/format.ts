@@ -1,8 +1,11 @@
-export type DiscordChunk = Readonly<{ content: string; file?: Uint8Array }>;
+export type DiscordChunk = Readonly<{ content: string }>;
+
+type Fence = Readonly<{ marker: string; opening: string }>;
 
 export class DiscordMessageStream {
   readonly #completed: DiscordChunk[] = [];
   #pending = "";
+  #fence?: Fence;
 
   constructor(readonly maximum = 2000) {
     if (!Number.isSafeInteger(maximum) || maximum < 16) {
@@ -12,63 +15,72 @@ export class DiscordMessageStream {
 
   append(text: string): void {
     this.#pending += text;
+    while (this.#preview().length > this.maximum) {
+      const prefix = this.#fence ? `${this.#fence.opening}\n` : "";
+      let budget = this.maximum - prefix.length - 1;
+      let cut = 0;
+      let content = "";
+      let fence: Fence | undefined;
+      do {
+        if (budget < 1) throw new Error("code fence exceeds Discord message limit");
+        const portion = this.#pending.slice(0, budget);
+        const paragraphs = [...portion.matchAll(/\r?\n[ \t]*\r?\n/g)];
+        const paragraph = paragraphs.at(-1);
+        cut = paragraph ? paragraph.index! + paragraph[0].length : 0;
+        if (cut < budget / 2) cut = portion.lastIndexOf("\n") + 1;
+        if (cut < budget / 2) {
+          const whitespace = [...portion.matchAll(/[ \t]+/g)].at(-1);
+          cut = whitespace ? whitespace.index! + whitespace[0].length : 0;
+        }
+        if (cut < budget / 2) cut = budget;
+        if (lowSurrogate(this.#pending.charCodeAt(cut))) cut--;
+        if (!cut) throw new Error("code fence exceeds Discord message limit");
+        const raw = this.#pending.slice(0, cut);
+        fence = this.#fenceAfter(raw, this.#fence);
+        content = prefix + raw + (fence ? `${raw.endsWith("\n") ? "" : "\n"}${fence.marker}` : "");
+        budget -= content.length - this.maximum;
+      } while (content.length > this.maximum);
+      if (content.trim()) this.#completed.push({ content });
+      this.#pending = this.#pending.slice(cut);
+      this.#fence = fence;
+    }
   }
 
   finish(): void {
-    this.#completed.push(...this.#format(this.#pending));
+    if (this.#pending.trim()) this.#completed.push({ content: this.#preview() });
     this.#pending = "";
+    this.#fence = undefined;
   }
 
   snapshot(): DiscordChunk[] {
-    return [...this.#completed, ...this.#format(this.#pending)];
+    return this.#pending.trim() ? [...this.#completed, { content: this.#preview() }] : [...this.#completed];
   }
 
-  #format(text: string): DiscordChunk[] {
-    if (!text.trim()) return [];
-    const blocks: { text: string; separator: string }[] = [];
-    let start = 0;
-    let cursor = 0;
-    let separator = "";
-    let fence: string | undefined;
-    for (const raw of text.split("\n")) {
-      const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+  #preview(): string {
+    const prefix = this.#fence ? `${this.#fence.opening}\n` : "";
+    const fence = this.#fenceAfter(this.#pending, this.#fence, true);
+    const content = prefix + this.#pending;
+    return content + (fence ? `${content.endsWith("\n") ? "" : "\n"}${fence.marker}` : "");
+  }
+
+  #fenceAfter(text: string, previous?: Fence, final = false): Fence | undefined {
+    let fence = previous;
+    const lines = text.split("\n");
+    const count = final ? lines.length : lines.length - 1;
+    for (let index = 0; index < count; index++) {
+      const line = lines[index].replace(/\r$/, "");
       const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/);
-      if (fence && closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) {
+      if (fence && closing && closing[1][0] === fence.marker[0] && closing[1].length >= fence.marker.length) {
         fence = undefined;
       } else if (!fence) {
         const opening = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
-        if (opening && (opening[1][0] !== "`" || !opening[2].includes("`"))) fence = opening[1];
-      }
-      if (!fence && line.trim() === "" && cursor > start) {
-        blocks.push({ text: text.slice(start, cursor - 1), separator });
-        separator = text.slice(cursor - 1, cursor + raw.length + 1);
-        start = cursor + raw.length + 1;
-      }
-      cursor += raw.length + 1;
-    }
-    blocks.push({ text: text.slice(start), separator });
-    const output: DiscordChunk[] = [];
-    let current = "";
-    for (const block of blocks) {
-      if (!block.text.trim()) continue;
-      if (block.text.length > this.maximum) {
-        if (current) output.push({ content: current });
-        output.push({
-          content: "Text attached.",
-          file: new TextEncoder().encode(block.text),
-        });
-        current = "";
-      } else if (!current) {
-        current = block.text;
-      } else if (current.length + block.separator.length + block.text.length <= this.maximum) {
-        current += block.separator + block.text;
-      } else {
-        output.push({ content: current });
-        current = block.text;
+        if (
+          opening && (opening[1][0] !== "`" || !opening[2].includes("`")) &&
+          opening[0].length + 2 * opening[1].length + 4 <= this.maximum
+        ) fence = { marker: opening[1], opening: opening[0] };
       }
     }
-    if (current) output.push({ content: current });
-    return output;
+    return fence;
   }
 }
 

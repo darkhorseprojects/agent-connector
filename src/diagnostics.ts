@@ -1,5 +1,22 @@
 import { dirname, isAbsolute, join } from "@std/path";
 
+export type RequestProfile = Readonly<{
+  readyMs: number;
+  activeMs: number;
+  totalMs: number;
+  observations: readonly {
+    stage: string;
+    childUs: number;
+    receivedMs: number;
+    logWriteMs?: number;
+  }[];
+  droppedStages: number;
+  firstOutputReceivedMs?: number;
+  firstSendStartedMs?: number;
+  firstSendCompletedMs?: number;
+  firstDeltaLogMs?: number;
+}>;
+
 export class OperatorLog {
   readonly #path: string;
   #pending: Promise<void> = Promise.resolve();
@@ -20,7 +37,14 @@ export class OperatorLog {
   }
 
   record(id: string, stage: string, elapsedMs?: number, code?: string): Promise<void> {
-    const line = JSON.stringify({ time: new Date().toISOString(), id, stage, elapsedMs, code }) + "\n";
+    return this.#write(JSON.stringify({ time: new Date().toISOString(), id, stage, elapsedMs, code }) + "\n");
+  }
+
+  recordProfile(id: string, profile: RequestProfile): Promise<void> {
+    return this.#write(JSON.stringify({ time: new Date().toISOString(), id, profile }) + "\n");
+  }
+
+  #write(line: string): Promise<void> {
     const bytes = new TextEncoder().encode(line).length;
     const write = this.#pending.then(async () => {
       if (this.#size === undefined) {

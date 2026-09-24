@@ -5,6 +5,7 @@ import {
   GatewayIntentBits,
   type Message,
   Partials,
+  type SendableChannels,
   type TextBasedChannel,
 } from "discord.js";
 import { Effect, FiberMap, Semaphore, Stream } from "effect";
@@ -19,11 +20,14 @@ import { route, type RoutedRequest, selectPolicy } from "./route.ts";
 const attempt = <A>(work: () => Promise<A>) => Effect.tryPromise({ try: work, catch: (error) => error });
 type Work = Readonly<{
   id: string;
+  receivedAt: number;
+  readyAt: number;
   input: string;
   override: Readonly<Record<string, unknown>>;
   context: InvocationContext;
   grant: DiscordContext;
   target: RenderTarget;
+  typingChannel?: SendableChannels;
 }>;
 
 async function reportIncident(target: RenderTarget, id: string, error: unknown, log: OperatorLog): Promise<void> {
@@ -81,6 +85,7 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
     };
 
     const receiveMessage = (message: Message) => {
+      const receivedAt = performance.now();
       const request = route(options.config, message);
       if (!request) return;
       const key = JSON.stringify([request.policy, message.author.id, message.channelId]);
@@ -96,7 +101,7 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
       }
       if (reserve) preparing++;
       const id = crypto.randomUUID();
-      void messageWork(message, request, options.config, id).then((work) => {
+      void messageWork(message, request, options.config, id, receivedAt).then((work) => {
         if (reserve) preparing--;
         if (work) enqueue(work);
       }, (error) => {
@@ -105,9 +110,10 @@ export function runConnector(options: { token: string; config: ConnectorConfig }
       });
     };
     const receiveInteraction = (interaction: ChatInputCommandInteraction) => {
+      const receivedAt = performance.now();
       if (interaction.commandName !== "agent") return;
       const id = crypto.randomUUID();
-      void interactionWork(interaction, options.config, id).then((work) => {
+      void interactionWork(interaction, options.config, id, receivedAt).then((work) => {
         if (work) enqueue(work);
       }).catch((error) => {
         void log.record(id, "interaction.failed", undefined, error instanceof Error ? error.name : "UnknownFailure");
@@ -135,6 +141,7 @@ async function messageWork(
   request: RoutedRequest,
   config: ConnectorConfig,
   id: string,
+  receivedAt: number,
 ): Promise<Work | undefined> {
   let target: TextBasedChannel = message.channel;
   if (request.createThread) {
@@ -156,6 +163,8 @@ async function messageWork(
   };
   return {
     id,
+    receivedAt,
+    readyAt: performance.now(),
     input: request.input,
     override: {},
     context,
@@ -169,6 +178,7 @@ async function messageWork(
       guildId: context.guild,
     },
     target: target as unknown as RenderTarget,
+    typingChannel: target,
   };
 }
 
@@ -176,6 +186,7 @@ async function interactionWork(
   interaction: ChatInputCommandInteraction,
   config: ConnectorConfig,
   id: string,
+  receivedAt: number,
 ): Promise<Work | undefined> {
   const channel = interaction.channel;
   const member = interaction.user.id;
@@ -219,6 +230,8 @@ async function interactionWork(
   };
   return {
     id,
+    receivedAt,
+    readyAt: performance.now(),
     input,
     override,
     context,
@@ -235,6 +248,30 @@ async function interactionWork(
 
 function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: OperatorLog) {
   return Effect.gen(function* () {
+    const activeAt = performance.now();
+    const observations: Array<{ stage: string; childUs: number; receivedMs: number; logWriteMs?: number }> = [];
+    let droppedStages = 0;
+    let firstOutputReceivedMs: number | undefined;
+    let firstSendStartedMs: number | undefined;
+    let firstSendCompletedMs: number | undefined;
+    let firstDeltaLogMs: number | undefined;
+    if (config.profiling) {
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          log.recordProfile(work.id, {
+            readyMs: work.readyAt - work.receivedAt,
+            activeMs: activeAt - work.receivedAt,
+            totalMs: performance.now() - work.receivedAt,
+            observations,
+            droppedStages,
+            firstOutputReceivedMs,
+            firstSendStartedMs,
+            firstSendCompletedMs,
+            firstDeltaLogMs,
+          }).catch(() => console.error(`[${work.id}] Profile write failed`))
+        )
+      );
+    }
     const policy = config.policies[work.context.policy];
     const grant = policy.discord
       ? yield* Effect.acquireRelease(
@@ -242,7 +279,39 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
         (grant) => Effect.sync(() => grant.revoke()),
       )
       : undefined;
-    const renderer = new DiscordRenderer(work.target, config.limits.outputMessages);
+    let delivered = false;
+    const target: RenderTarget = work.typingChannel || config.profiling
+      ? {
+        send: async (options) => {
+          if (config.profiling) firstSendStartedMs ??= performance.now() - work.receivedAt;
+          const message = await work.target.send(options);
+          delivered = true;
+          if (config.profiling) firstSendCompletedMs ??= performance.now() - work.receivedAt;
+          return message;
+        },
+      }
+      : work.target;
+    if (work.typingChannel) {
+      const channel = work.typingChannel;
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          while (!delivered) {
+            const sent = yield* attempt(() => channel.sendTyping()).pipe(
+              Effect.match({ onFailure: () => false, onSuccess: () => true }),
+            );
+            if (!sent) {
+              yield* Effect.promise(() =>
+                log.record(work.id, "typing.failed")
+                  .catch(() => console.error(`[${work.id}] Typing diagnostic write failed`))
+              );
+              return;
+            }
+            yield* Effect.sleep("8 seconds");
+          }
+        }),
+      );
+    }
+    const renderer = new DiscordRenderer(target, config.limits.outputMessages);
     const decoder = new TextDecoder("utf-8", { fatal: true });
     const started = performance.now();
     let firstDelta = true;
@@ -254,13 +323,29 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
       input: work.input,
       override: work.override,
       discord: grant,
+      profile: config.profiling,
     }).pipe(
       Stream.runForEach((event) => {
         if (event.type === "log") {
-          return Effect.promise(() => log.record(work.id, event.stage, performance.now() - started));
+          const received = performance.now();
+          let observation: (typeof observations)[number] | undefined;
+          if (config.profiling) {
+            if (event.atUs === undefined) return Effect.fail(new Error("profile timestamp is unavailable"));
+            if (observations.length < 256) {
+              observation = { stage: event.stage, childUs: event.atUs, receivedMs: received - work.receivedAt };
+              observations.push(observation);
+            } else droppedStages++;
+          }
+          return Effect.promise(async () => {
+            await log.record(work.id, event.stage, received - started);
+            if (observation) observation.logWriteMs = performance.now() - received;
+          });
         }
         if (event.type === "traceback") {
           return Effect.promise(() => log.record(work.id, "lua.traceback", performance.now() - started));
+        }
+        if (config.profiling && (event.type === "append" || event.type === "emit") && event.output.length > 0) {
+          firstOutputReceivedMs ??= performance.now() - work.receivedAt;
         }
         return attempt(async () => {
           let text: string;
@@ -272,7 +357,9 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
           if (event.type === "append") {
             if (firstDelta) {
               firstDelta = false;
-              await log.record(work.id, "model.first_delta", performance.now() - started);
+              const received = performance.now();
+              await log.record(work.id, "model.first_delta", received - started);
+              if (config.profiling) firstDeltaLogMs = performance.now() - received;
             }
             await renderer.append(text);
           } else if (event.type === "result") await renderer.result(text);

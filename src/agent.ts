@@ -84,6 +84,7 @@ export function runAgent(options: {
   input: string;
   override: Readonly<Record<string, unknown>>;
   discord?: DiscordGrant;
+  profile: boolean;
 }) {
   return Stream.unwrap(Effect.gen(function* () {
     const root = yield* makePolicyAgent(options.policy);
@@ -112,6 +113,7 @@ export function runAgent(options: {
       encoder.encode(options.input),
       invocationConfig(options.policy, options.context, options.override),
       imports,
+      options.profile,
     );
   })).pipe(Stream.provide(processLayer));
 }

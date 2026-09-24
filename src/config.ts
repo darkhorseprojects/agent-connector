@@ -34,6 +34,7 @@ const PolicySource = Schema.Struct({
 const Root = Schema.Struct({
   version: Schema.Literal(1),
   concurrency: Schema.optional(Positive),
+  profiling: Schema.optional(Schema.Boolean),
   limits: Schema.optional(LimitSource),
   policies: Schema.Record(Schema.String, Schema.Unknown),
   members: Routes,
@@ -95,6 +96,7 @@ export function parseConfig(source: string, directory: string, allowEmpty = fals
     );
   return {
     concurrency: root.concurrency ?? 4,
+    profiling: root.profiling ?? false,
     limits: {
       pendingRequests: root.limits?.pending_requests ?? 32,
       lifetimeMs: root.limits?.lifetime_ms ?? 600000,

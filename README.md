@@ -88,11 +88,14 @@ Import named `discord`; it does not modify the agent's opaque config. An agent c
 
 Configured channel or thread-parent routes take precedence, followed by member routes, then guild routes. DMs require a
 member route. Configured channels receive ordinary messages directly; member and guild routes in a guild require a bot
-mention. Empty maps deny access.
+mention. Empty maps deny access. Accepted message requests show typing in their destination channel while actively
+running, until the first response message is delivered. Queued requests do not send periodic typing requests. Slash
+commands use their deferred reply instead.
 
 A newer request interrupts the same policy/member/channel request. Global concurrency and pending-request limits apply
 across message and command invocations. Absent operational settings default to concurrency 4, pending requests 32, a
-ten-minute lifetime, an 8 MiB loopback RPC limit, and 32 output messages.
+ten-minute lifetime, an 8 MiB loopback RPC limit, and 32 output messages. Set top-level `profiling: true` in `ac.yaml`
+to collect bounded, metadata-only request profiles; it is off by default and is not an Agent config override.
 
 ## Per-call config
 
@@ -112,16 +115,20 @@ validation and resource ceilings; the override is not persisted and never modifi
 
 Connector renders complete `pa.emit(bytes)` messages, incremental `pa.emit(bytes, "append")` fragments, and the terminal
 Agent output as Markdown. Zinc owns any distinction between reasoning and content. Connector throttles edits to a live
-tail, never reflows completed messages, splits at paragraph boundaries, and attaches indivisible oversized blocks as
-UTF-8 text files. Mentions stay disabled and `output_messages` applies to attachments too. A final result that begins
-with already-rendered content contributes only its remaining footer.
+tail, never reflows completed messages, and splits long output across Discord messages at paragraph, line, or word
+boundaries (or within an unbroken run), reopening code fences where needed. Mentions stay disabled; exceeding
+`output_messages` fails explicitly. A final result that begins with already-rendered content contributes only its
+remaining footer.
 
 Each request gets a correlation ID before execution. Bounded metadata-only JSONL diagnostics (stage, elapsed time, error
 code; no prompts or tokens) are stored with mode `0600` under
 `${XDG_STATE_HOME:-$HOME/.local/state}/agent-connector/requests.jsonl` on Linux,
 `$HOME/Library/Logs/agent-connector/requests.jsonl` on macOS, or `%LOCALAPPDATA%\\agent-connector\\requests.jsonl` on
 Windows. The file rotates at 8 MiB and retains one previous file. Discord sees only the incident ID, never a Lua
-traceback.
+traceback. When profiling is enabled, one additional JSONL record per request contains
+gateway-to-ready/active/first-send offsets, bounded child stage observations, and partial timings on failure or
+interruption. `deno run --allow-read tools/profile_requests.ts PATH/requests.jsonl` summarizes these records. Child
+`atUs` values share only the PA child's clock; they are not directly comparable to Connector offsets.
 
 Agents invoked through final-only `Agent.call` can use `pa.emit` safely because it is a no-op when emissions are
 disabled.
