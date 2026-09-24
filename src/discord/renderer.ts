@@ -12,6 +12,7 @@ export class DiscordRenderer {
   constructor(readonly target: RenderTarget, readonly maximum?: number) {}
 
   append(text: string): void {
+    if (this.#pending && !this.#model) this.#pending += "\n\n";
     this.#pending += text;
     this.#model += text;
   }
