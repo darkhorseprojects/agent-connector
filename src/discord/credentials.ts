@@ -105,7 +105,8 @@ export async function registerCommand(token: string, application: string): Promi
     name: "agent",
     description: "Run the configured agent policy",
     options: [
-      { type: 3, name: "prompt", description: "Prompt for the agent", required: true, max_length: 6000 },
+      { type: 3, name: "prompt", description: "Prompt for the agent", required: false, max_length: 6000 },
+      { type: 11, name: "image", description: "Image for the agent", required: false },
       { type: 3, name: "config", description: "One-call YAML config override", required: false, max_length: 6000 },
     ],
   };

@@ -1,67 +1,52 @@
-import { type DiscordChunk, DiscordMessageStream } from "./format.ts";
+import { DiscordMessageStream } from "./format.ts";
 
-const LIMIT = 2000;
-const options = (chunk: DiscordChunk) => ({
-  content: chunk.content,
-  allowedMentions: { parse: [] as never[] },
-});
-type MessageOptions = ReturnType<typeof options>;
-type RenderedMessage = Readonly<{ edit(options: MessageOptions): Promise<unknown> }>;
-export type RenderTarget = Readonly<{ send(options: MessageOptions): Promise<RenderedMessage> }>;
+const options = (content: string) => ({ content, allowedMentions: { parse: [] as never[] } });
+export type RenderTarget = Readonly<{ send(message: ReturnType<typeof options>): Promise<unknown> }>;
 
 export class DiscordRenderer {
-  readonly #stream = new DiscordMessageStream(LIMIT);
-  readonly #rendered: { message: RenderedMessage; chunk: DiscordChunk }[] = [];
-  #shown = "";
-  #lastUpdate = 0;
+  #pending = "";
+  #model = "";
+  #lastTurn = "";
+  #sent = 0;
 
   constructor(readonly target: RenderTarget, readonly maximum?: number) {}
 
-  async append(text: string): Promise<void> {
-    if (!text) return;
-    this.#stream.append(text);
-    this.#shown += text;
-    if (!this.#lastUpdate || performance.now() - this.#lastUpdate >= 750) {
-      await this.#flush();
-      this.#lastUpdate = performance.now();
-    }
+  append(text: string): void {
+    this.#pending += text;
+    this.#model += text;
   }
 
-  async write(text: string): Promise<void> {
-    await this.finish();
-    this.#shown = "";
-    this.#lastUpdate = 0;
-    if (!text.trim()) return;
-    this.#stream.append(text);
-    await this.finish();
+  write(text: string): void {
+    if (text.trim()) this.#pending += (this.#pending.trim() ? "\n\n" : "") + text;
+  }
+
+  async turn(): Promise<void> {
+    await this.#send(this.#pending);
+    this.#lastTurn = this.#model;
+    this.#pending = "";
+    this.#model = "";
   }
 
   async result(text: string): Promise<void> {
-    await this.#flush();
-    if (this.#shown && text.startsWith(this.#shown)) {
-      this.#stream.append(text.slice(this.#shown.length));
-    } else await this.write(text);
-    await this.finish();
+    if (this.#pending.trim()) await this.turn();
+    const marker = text.indexOf("\n\n-# result #");
+    const body = marker < 0 ? text : text.slice(0, marker);
+    if (this.#lastTurn && this.#lastTurn.endsWith(body)) text = marker < 0 ? "" : text.slice(marker).trim();
+    await this.#send(text);
   }
 
-  async finish(): Promise<void> {
-    this.#stream.finish();
-    await this.#flush();
-  }
-
-  async #flush(): Promise<void> {
-    const chunks = this.#stream.snapshot();
-    if (this.maximum !== undefined && chunks.length > this.maximum) {
+  async #send(text: string): Promise<void> {
+    if (!text.trim()) return;
+    const chunks = new DiscordMessageStream();
+    chunks.append(text);
+    chunks.finish();
+    const messages = chunks.snapshot();
+    if (this.maximum !== undefined && this.#sent + messages.length > this.maximum) {
       throw new Error("agent output exceeds configured message limit");
     }
-    for (let index = 0; index < chunks.length; index++) {
-      const chunk = chunks[index];
-      const previous = this.#rendered[index];
-      if (previous?.chunk.content === chunk.content) continue;
-      if (previous) {
-        await previous.message.edit(options(chunk));
-        previous.chunk = chunk;
-      } else this.#rendered.push({ message: await this.target.send(options(chunk)), chunk });
+    for (const message of messages) {
+      await this.target.send(options(message.content));
+      this.#sent++;
     }
   }
 }

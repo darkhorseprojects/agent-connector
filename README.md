@@ -1,8 +1,8 @@
 # Agent Connector
 
-Agent Connector routes Discord messages to Portable Agents policies. It passes the message as raw UTF-8 input, applies a
-one-call overlay to the policy's opaque JSON config, supplies configured PA Imports, and renders incremental and final
-Agent bytes as Discord Markdown.
+Agent Connector routes Discord messages to Portable Agents policies. It passes text as UTF-8 input, applies a one-call
+overlay to the policy's opaque JSON config, supplies configured PA Imports, and delivers completed assistant turns as
+Discord Markdown. Image attachments are passed in a bounded envelope for image-capable agents such as Zinc.
 
 ## Install
 
@@ -52,6 +52,7 @@ policies:
     memory_bytes: 100663296
     instructions: 200000000
     discord: true
+    images: true
     imports: {}
     overrides: [parent, memory, run, models, retrieval]
     config:
@@ -80,17 +81,19 @@ imports:
       actor: research-account
 ```
 
-The edge config recursively overlays the imported policy's config. `discord: true` separately supplies the built-in
-Import named `discord`; it does not modify the agent's opaque config. An agent can inspect its PA grants with
-`pa.imports()`.
+The edge config recursively overlays the imported policy's config. `images: true` opts a policy into image envelopes;
+text-only policies retain raw UTF-8 input. `discord: true` separately supplies the built-in Import named `discord`; it
+does not modify the agent's opaque config. An agent can inspect its PA grants with `pa.imports()`.
 
 ## Routing
 
 Configured channel or thread-parent routes take precedence, followed by member routes, then guild routes. DMs require a
 member route. Configured channels receive ordinary messages directly; member and guild routes in a guild require a bot
 mention. Empty maps deny access. Accepted message requests show typing in their destination channel while actively
-running, until the first response message is delivered. Queued requests do not send periodic typing requests. Slash
-commands use their deferred reply instead.
+running. Queued requests do not send periodic typing requests. Slash commands use their deferred reply instead. Ordinary
+messages may include text and image attachments, or images alone in an already-routed channel; mention-routed guild
+messages still require a bot mention. PNG, JPEG, and WebP attachments are limited to four files and 4 MiB total. Images
+are not retained for follow-up turns, so reattach them when needed.
 
 A newer request interrupts the same policy/member/channel request. Global concurrency and pending-request limits apply
 across message and command invocations. Absent operational settings default to concurrency 4, pending requests 32, a
@@ -99,7 +102,8 @@ to collect bounded, metadata-only request profiles; it is off by default and is 
 
 ## Per-call config
 
-The registered command accepts a prompt and optional YAML object:
+The registered command accepts a prompt, an optional image, and an optional YAML object; either prompt or image is
+required:
 
 ```text
 /agent prompt:"Investigate this" config:"run: {quota_tokens: 12000}"
@@ -113,12 +117,12 @@ validation and resource ceilings; the override is not persisted and never modifi
 
 ## Output
 
-Connector renders complete `pa.emit(bytes)` messages, incremental `pa.emit(bytes, "append")` fragments, and the terminal
-Agent output as Markdown. Zinc owns any distinction between reasoning and content. Connector throttles edits to a live
-tail, never reflows completed messages, and splits long output across Discord messages at paragraph, line, or word
-boundaries (or within an unbroken run), reopening code fences where needed. Mentions stay disabled; exceeding
-`output_messages` fails explicitly. A final result that begins with already-rendered content contributes only its
-remaining footer.
+Connector buffers `pa.emit(bytes, "append")` fragments and complete `pa.emit(bytes)` output. Zinc signals each finished
+assistant model turn with an empty emission. Connector then sends that turn as new messages, even if the Agent continues
+through tools and later turns; it does not edit provisional text. Tool output is included with the next completed turn.
+Long output splits at paragraph, line, or word boundaries (or within an unbroken run), reopening code fences where
+needed. Mentions stay disabled; exceeding `output_messages` fails explicitly. The terminal result adds only the footer
+when its answer was already delivered.
 
 Each request gets a correlation ID before execution. Bounded metadata-only JSONL diagnostics (stage, elapsed time, error
 code; no prompts or tokens) are stored with mode `0600` under

@@ -1,4 +1,5 @@
 import {
+  type Attachment,
   type ChatInputCommandInteraction,
   Client,
   Events,
@@ -18,6 +19,45 @@ import { OperatorLog } from "./diagnostics.ts";
 import { route, type RoutedRequest, selectPolicy } from "./route.ts";
 
 const attempt = <A>(work: () => Promise<A>) => Effect.tryPromise({ try: work, catch: (error) => error });
+const IMAGE_BYTES = 4 * 1024 * 1024;
+const IMAGE_COUNT = 4;
+
+async function imageInput(question: string, attachments: readonly Attachment[]): Promise<string> {
+  if (!attachments.length) return question;
+  if (attachments.length > IMAGE_COUNT) throw new Error("too many image attachments");
+  const images: { type: string; data: string }[] = [];
+  let total = 0;
+  for (const attachment of attachments) {
+    const type = attachment.contentType;
+    if (type !== "image/png" && type !== "image/jpeg" && type !== "image/webp") {
+      throw new Error("unsupported image attachment");
+    }
+    if (!attachment.size || total + attachment.size > IMAGE_BYTES) throw new Error("images exceed 4 MiB");
+    const url = new URL(attachment.url);
+    if (url.protocol !== "https:" || url.hostname !== "cdn.discordapp.com") {
+      throw new Error("invalid image attachment URL");
+    }
+    const response = await fetch(url, { redirect: "error" });
+    if (!response.ok || !response.body) throw new Error("image download failed");
+    const bytes = new Uint8Array(attachment.size);
+    let length = 0;
+    for await (const chunk of response.body) {
+      total += chunk.length;
+      if (total > IMAGE_BYTES || length + chunk.length > bytes.length) throw new Error("images exceed declared size");
+      bytes.set(chunk, length);
+      length += chunk.length;
+    }
+    const data = bytes.subarray(0, length);
+    if (
+      type === "image/png" && data.subarray(0, 8).toHex() !== "89504e470d0a1a0a" ||
+      type === "image/jpeg" && (data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff) ||
+      type === "image/webp" && (new TextDecoder().decode(data.slice(0, 4)) !== "RIFF" ||
+          new TextDecoder().decode(data.slice(8, 12)) !== "WEBP")
+    ) throw new Error("image attachment signature is invalid");
+    images.push({ type, data: data.toBase64() });
+  }
+  return "\x1e" + JSON.stringify({ question: question || "Describe the attached image.", images });
+}
 type Work = Readonly<{
   id: string;
   receivedAt: number;
@@ -165,7 +205,12 @@ async function messageWork(
     id,
     receivedAt,
     readyAt: performance.now(),
-    input: request.input,
+    input: config.policies[request.policy].images
+      ? await imageInput(
+        request.input,
+        [...message.attachments.values()].filter((attachment) => attachment.contentType?.startsWith("image/")),
+      )
+      : request.input,
     override: {},
     context,
     grant: {
@@ -196,8 +241,13 @@ async function interactionWork(
     await interaction.reply({ content: "This command is not configured here.", ephemeral: true });
     return undefined;
   }
-  const input = interaction.options.getString("prompt", true).trim();
-  if (!input) {
+  const input = interaction.options.getString("prompt")?.trim() ?? "";
+  const image = interaction.options.getAttachment("image");
+  if (image && !config.policies[selected.policy].images) {
+    await interaction.reply({ content: "This policy does not accept images.", ephemeral: true });
+    return undefined;
+  }
+  if (!input && !image) {
     await interaction.reply({ content: "Prompt cannot be empty.", ephemeral: true });
     return undefined;
   }
@@ -232,7 +282,7 @@ async function interactionWork(
     id,
     receivedAt,
     readyAt: performance.now(),
-    input,
+    input: await imageInput(input, image ? [image] : []),
     override,
     context,
     grant: {
@@ -279,13 +329,11 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
         (grant) => Effect.sync(() => grant.revoke()),
       )
       : undefined;
-    let delivered = false;
     const target: RenderTarget = work.typingChannel || config.profiling
       ? {
         send: async (options) => {
           if (config.profiling) firstSendStartedMs ??= performance.now() - work.receivedAt;
           const message = await work.target.send(options);
-          delivered = true;
           if (config.profiling) firstSendCompletedMs ??= performance.now() - work.receivedAt;
           return message;
         },
@@ -295,7 +343,7 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
       const channel = work.typingChannel;
       yield* Effect.forkScoped(
         Effect.gen(function* () {
-          while (!delivered) {
+          while (true) {
             const sent = yield* attempt(() => channel.sendTyping()).pipe(
               Effect.match({ onFailure: () => false, onSuccess: () => true }),
             );
@@ -361,9 +409,10 @@ function task(work: Work, config: ConnectorConfig, rpc: DiscordRpcServer, log: O
               await log.record(work.id, "model.first_delta", received - started);
               if (config.profiling) firstDeltaLogMs = performance.now() - received;
             }
-            await renderer.append(text);
+            renderer.append(text);
           } else if (event.type === "result") await renderer.result(text);
-          else await renderer.write(text);
+          else if (text === "") await renderer.turn();
+          else renderer.write(text);
         });
       }),
     );

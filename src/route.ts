@@ -37,7 +37,9 @@ export function route(config: ConnectorConfig, message: Message): RoutedRequest 
     input = stripped;
   } else input = stripBotMention(input, config.identity.bot) ?? input;
   input = input.trim();
-  return selected.policy && input
+  return selected.policy &&
+      (input || config.policies[selected.policy].images &&
+          message.attachments.some((attachment) => attachment.contentType?.startsWith("image/")))
     ? { policy: selected.policy, input, createThread: selected.channel && parent === undefined }
     : null;
 }
