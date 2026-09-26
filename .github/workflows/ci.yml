@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PORTABLE_AGENTS_COMMIT: 28bd7b27943fd3f4704b32a0e74f4cd9522b0253
+  PORTABLE_AGENTS_COMMIT: 60651612e39af51c5e40687f01d68ee1897a3f94
 
 jobs:
   verify:
@@ -76,7 +76,7 @@ jobs:
         working-directory: portable-agents
         run: |
           curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o "$RUNNER_TEMP/lua.tar.gz"
-          if command -v sha256sum >/dev/null; then actual=$(sha256sum "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); elif command -v shasum >/dev/null; then actual=$(shasum -a 256 "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); else actual=$(pwsh -NoProfile -Command '(Get-FileHash -Algorithm SHA256 (Join-Path $env:RUNNER_TEMP "lua.tar.gz")).Hash.ToLower()'); fi
+          if command -v sha256sum >/dev/null; then actual=$(sha256sum < "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); elif command -v shasum >/dev/null; then actual=$(shasum -a 256 < "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); else actual=$(pwsh -NoProfile -Command '(Get-FileHash -Algorithm SHA256 (Join-Path $env:RUNNER_TEMP "lua.tar.gz")).Hash.ToLower()'); fi
           test "$actual" = 57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
           tar -xzf "$RUNNER_TEMP/lua.tar.gz" -C "$RUNNER_TEMP"
           mkdir -p "$RUNNER_TEMP/lua55/include" "$RUNNER_TEMP/lua55/lib/pkgconfig" "$RUNNER_TEMP/lua55/bin"
@@ -101,7 +101,7 @@ jobs:
           [[ "$RUNNER_OS" != Linux ]] || export LD_LIBRARY_PATH="$RUNNER_TEMP/lua55/lib"
           [[ "$RUNNER_OS" != macOS ]] || export DYLD_LIBRARY_PATH="$RUNNER_TEMP/lua55/lib"
           [[ "$RUNNER_OS" != Windows ]] || export PATH="$RUNNER_TEMP/lua55/bin:$PATH"
-          zig build -Doptimize=ReleaseSafe ${{ matrix.id == 'windows-aarch64' && '-Dtarget=aarch64-windows-gnu' || '' }} -Dsystem-lua=true --search-prefix "$RUNNER_TEMP/lua55"
+          zig build -Doptimize=ReleaseSafe ${{ matrix.id == 'windows-aarch64' && '-Dtarget=aarch64-windows-gnu' || '' }} -Dsystem-lua=true -Dlua-include="$RUNNER_TEMP/lua55/include" --search-prefix "$RUNNER_TEMP/lua55"
           cp "$library" zig-out/bin/
       - name: Compile
         working-directory: agent-connector

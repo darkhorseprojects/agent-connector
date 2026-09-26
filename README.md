@@ -81,7 +81,7 @@ Connector builds against the sibling `../portable-agents` workspace and binary:
 
 ```sh
 cd ../portable-agents
-zig build -Doptimize=ReleaseSafe -Dsystem-lua=true
+zig build -Doptimize=ReleaseSafe -Dsystem-lua=true -Dlua-include=/path/to/lua/include --search-prefix /path/to/lua
 cd ../agent-connector
 deno task check
 deno task compile

@@ -16,7 +16,7 @@ itself.
   messages with mentions disabled. Diagnostics are bounded and profiling is opt-in.
 - Each download bundles the platform's `agc` and Portable Agents `agent` executables, the matching Lua 5.5 shared
   library, built-in package assets, packaging examples, licenses, and third-party notices. The bundled Portable Agents
-  revision matches its `v0.1.0` release. No separate JSR SDK installation is needed to run the compiled binary.
+  revision matches its `v0.1.1` release. No separate JSR SDK installation is needed to run the compiled binary.
 
 ## Downloads
 
