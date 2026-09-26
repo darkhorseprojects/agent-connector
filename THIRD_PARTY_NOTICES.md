@@ -6,7 +6,7 @@ Their own license terms apply.
 ## Portable Agents
 
 - Package: `@darkhorseprojects/portable-agents`
-- License: MIT
+- License: AGPL-3.0-only
 - Source: https://github.com/darkhorseprojects/portable-agents
 
 ## Deno standard library
