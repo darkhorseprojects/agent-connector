@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PORTABLE_AGENTS_COMMIT: ac095bc0808b66e06395a6a6c9d763e968420bb8
+  PORTABLE_AGENTS_COMMIT: 18d3449e1ff35488f16daed87f7e11a17fe7550d
 
 jobs:
   verify:
@@ -42,8 +42,8 @@ jobs:
         include:
           - { os: ubuntu-24.04, id: linux-x86_64 }
           - { os: ubuntu-24.04-arm, id: linux-aarch64 }
-          - { os: macos-13, id: macos-x86_64 }
-          - { os: macos-14, id: macos-aarch64 }
+          - { os: macos-15-intel, id: macos-x86_64 }
+          - { os: macos-15, id: macos-aarch64 }
           - { os: windows-latest, id: windows-x86_64 }
           - { os: windows-11-arm, id: windows-aarch64 }
     runs-on: ${{ matrix.os }}
@@ -110,12 +110,24 @@ jobs:
     environment: release
     permissions: { contents: write }
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with: { pattern: agent-connector-*, path: artifacts }
       - name: Archive
         working-directory: artifacts
         run: |
-          for directory in agent-connector-*; do tar -czf "$directory.tar.gz" "$directory"; done
-          sha256sum agent-connector-*.tar.gz > SHA256SUMS
+          for directory in agent-connector-*; do
+            case "$directory" in
+              *-windows-*) zip -qr "$directory.zip" "$directory" ;;
+              *) tar -czf "$directory.tar.gz" "$directory" ;;
+            esac
+          done
+          sha256sum agent-connector-*.tar.gz agent-connector-*.zip > SHA256SUMS
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
-        with: { files: "artifacts/*", generate_release_notes: true }
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+          body_path: RELEASE_NOTES.md
