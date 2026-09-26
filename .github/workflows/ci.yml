@@ -78,7 +78,7 @@ jobs:
           curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o "$RUNNER_TEMP/lua.tar.gz"
           if command -v sha256sum >/dev/null; then actual=$(sha256sum < "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); elif command -v shasum >/dev/null; then actual=$(shasum -a 256 < "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); else actual=$(pwsh -NoProfile -Command '(Get-FileHash -Algorithm SHA256 (Join-Path $env:RUNNER_TEMP "lua.tar.gz")).Hash.ToLower()'); fi
           test "$actual" = 57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
-          tar -xzf "$RUNNER_TEMP/lua.tar.gz" -C "$RUNNER_TEMP"
+          tar -xzf - -C "$RUNNER_TEMP" < "$RUNNER_TEMP/lua.tar.gz"
           mkdir -p "$RUNNER_TEMP/lua55/include" "$RUNNER_TEMP/lua55/lib/pkgconfig" "$RUNNER_TEMP/lua55/bin"
           cp "$RUNNER_TEMP/lua-5.5.0/src/"*.h "$RUNNER_TEMP/lua55/include/"
           sources=$(find "$RUNNER_TEMP/lua-5.5.0/src" -maxdepth 1 -name '*.c' ! -name lua.c ! -name luac.c ! -name onelua.c ! -name ltests.c -print)
