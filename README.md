@@ -1,20 +1,27 @@
 # Agent Connector
 
-Agent Connector (`agc`) is a Discord front end for [Portable Agents](https://github.com/darkhorseprojects/portable-agents). It routes authorized messages and `/agent` commands to configured agent policies, passes input and optional images to an agent, and delivers completed turns back to Discord.
+Agent Connector (`agc`) is a Discord front end for
+[Portable Agents](https://github.com/darkhorseprojects/portable-agents). It routes authorized messages and `/agent`
+commands to configured agent policies, passes input and optional images to an agent, and delivers completed turns back
+to Discord.
 
-Connector handles routing, credentials, process limits, and Discord delivery. The selected agent owns its behavior and interprets its own configuration; Connector does not make an agent inherently safe. Review policy grants and package code before exposing a bot.
+Connector handles routing, credentials, process limits, and Discord delivery. The selected agent owns its behavior and
+interprets its own configuration; Connector does not make an agent inherently safe. Review policy grants and package
+code before exposing a bot.
 
-See the [Agent Connector wiki](https://github.com/darkhorseprojects/agent-connector/wiki) for policy, routing, and deployment details.
+See the [Agent Connector wiki](https://github.com/darkhorseprojects/agent-connector/wiki) for policy, routing, and
+deployment details.
 
 ## Install and connect
 
-Install `agc`, `agent`, and the included Lua 5.5 shared library into the same executable directory. Install the built-in packages under the per-user application-data directory:
+Install `agc`, `agent`, and the included Lua 5.5 shared library into the same executable directory. Install the built-in
+packages under the per-user application-data directory:
 
-| Platform | Package directory |
-| --- | --- |
-| Linux | `${XDG_DATA_HOME:-$HOME/.local/share}/agent-connector/packages` |
-| macOS | `$HOME/Library/Application Support/Agent Connector/packages` |
-| Windows | `%LOCALAPPDATA%\Agent Connector\packages` |
+| Platform | Package directory                                               |
+| -------- | --------------------------------------------------------------- |
+| Linux    | `${XDG_DATA_HOME:-$HOME/.local/share}/agent-connector/packages` |
+| macOS    | `$HOME/Library/Application Support/Agent Connector/packages`    |
+| Windows  | `%LOCALAPPDATA%\Agent Connector\packages`                       |
 
 Create or edit `ac.yaml`, then register a Discord bot and start Connector:
 
@@ -24,11 +31,13 @@ agc check .
 agc run .
 ```
 
-`connect` validates the bot token, registers the `/agent` command, and stores credentials in the platform's native credential store. The token is not written to `ac.yaml` or passed to an Agent process.
+`connect` validates the bot token, registers the `/agent` command, and stores credentials in the platform's native
+credential store. The token is not written to `ac.yaml` or passed to an Agent process.
 
 ## Configure a policy
 
-Policies map named agents to their package, entry point, resource ceilings, Imports, and opaque agent config. Routes map Discord members, channels, or guilds to policy names. For example:
+Policies map named agents to their package, entry point, resource ceilings, Imports, and opaque agent config. Routes map
+Discord members, channels, or guilds to policy names. For example:
 
 ```yaml
 version: 1
@@ -49,14 +58,21 @@ channels: {}
 guilds: {}
 ```
 
-The sample demonstrates Zinc's actor-scoped memory and optional Discord Import. Set routes explicitly; empty route maps deny access. `overrides` grants `/agent` callers permission to change only the listed top-level config fields. Without a grant, per-call changes are denied. See the [wiki](https://github.com/darkhorseprojects/agent-connector/wiki) for the complete configuration reference and routing precedence.
+The sample demonstrates Zinc's actor-scoped memory and optional Discord Import. Set routes explicitly; empty route maps
+deny access. `overrides` grants `/agent` callers permission to change only the listed top-level config fields. Without a
+grant, per-call changes are denied. See the [wiki](https://github.com/darkhorseprojects/agent-connector/wiki) for the
+complete configuration reference and routing precedence.
 
 ## How requests work
 
-- Channel routes take precedence over member and guild routes. Member and guild routes in a server require a bot mention; DMs require a member route.
-- A newer request interrupts an in-flight request for the same policy, member, and channel. Concurrency and pending-request limits apply across messages and commands.
-- Image-enabled policies can receive up to four PNG, JPEG, or WebP attachments, with a combined 4 MiB limit. Images are not retained for follow-up turns.
-- Completed assistant turns are sent as Discord messages; Connector does not publish provisional text. Mentions are disabled in agent output.
+- Channel routes take precedence over member and guild routes. Member and guild routes in a server require a bot
+  mention; DMs require a member route.
+- A newer request interrupts an in-flight request for the same policy, member, and channel. Concurrency and
+  pending-request limits apply across messages and commands.
+- Image-enabled policies can receive up to four PNG, JPEG, or WebP attachments, with a combined 4 MiB limit. Images are
+  not retained for follow-up turns.
+- Completed assistant turns are sent as Discord messages; Connector does not publish provisional text. Mentions are
+  disabled in agent output.
 - Bounded metadata-only diagnostics are stored locally. Profiling is opt-in.
 
 ## Development
@@ -71,11 +87,13 @@ deno task check
 deno task compile
 ```
 
-PA and package native modules require an ABI-compatible dynamic Lua 5.5 runtime. The compiled distribution includes the required Lua library and licenses/notices; standalone builds also require the native keyring addon.
+PA and package native modules require an ABI-compatible dynamic Lua 5.5 runtime. The compiled distribution includes the
+required Lua library and licenses/notices; standalone builds also require the native keyring addon.
 
 ## Learn more
 
-- [Agent Connector wiki](https://github.com/darkhorseprojects/agent-connector/wiki) — policies, routing, Discord behavior, and deployment
+- [Agent Connector wiki](https://github.com/darkhorseprojects/agent-connector/wiki) — policies, routing, Discord
+  behavior, and deployment
 - [Portable Agents](https://github.com/darkhorseprojects/portable-agents) — the Lua package runtime used to run agents
 - [Zinc](https://github.com/darkhorseprojects/zinc) — a Portable Agents package with durable memory and retrieval
 
