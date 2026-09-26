@@ -75,20 +75,22 @@ jobs:
         shell: bash
         working-directory: portable-agents
         run: |
-          curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o "$RUNNER_TEMP/lua.tar.gz"
-          if command -v sha256sum >/dev/null; then actual=$(sha256sum < "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); elif command -v shasum >/dev/null; then actual=$(shasum -a 256 < "$RUNNER_TEMP/lua.tar.gz" | cut -d' ' -f1); else actual=$(pwsh -NoProfile -Command '(Get-FileHash -Algorithm SHA256 (Join-Path $env:RUNNER_TEMP "lua.tar.gz")).Hash.ToLower()'); fi
+          temp="$RUNNER_TEMP"
+          [[ "$RUNNER_OS" != Windows ]] || temp=$(cygpath -u "$RUNNER_TEMP")
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o "$temp/lua.tar.gz"
+          if command -v sha256sum >/dev/null; then actual=$(sha256sum < "$temp/lua.tar.gz" | cut -d' ' -f1); elif command -v shasum >/dev/null; then actual=$(shasum -a 256 < "$temp/lua.tar.gz" | cut -d' ' -f1); else actual=$(pwsh -NoProfile -Command '(Get-FileHash -Algorithm SHA256 (Join-Path $env:RUNNER_TEMP "lua.tar.gz")).Hash.ToLower()'); fi
           test "$actual" = 57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
-          tar -xzf - -C "$RUNNER_TEMP" < "$RUNNER_TEMP/lua.tar.gz"
-          mkdir -p "$RUNNER_TEMP/lua55/include" "$RUNNER_TEMP/lua55/lib/pkgconfig" "$RUNNER_TEMP/lua55/bin"
-          cp "$RUNNER_TEMP/lua-5.5.0/src/"*.h "$RUNNER_TEMP/lua55/include/"
-          sources=$(find "$RUNNER_TEMP/lua-5.5.0/src" -maxdepth 1 -name '*.c' ! -name lua.c ! -name luac.c ! -name onelua.c ! -name ltests.c -print)
+          tar -xzf - -C "$temp" < "$temp/lua.tar.gz"
+          mkdir -p "$temp/lua55/include" "$temp/lua55/lib/pkgconfig" "$temp/lua55/bin"
+          cp "$temp/lua-5.5.0/src/"*.h "$temp/lua55/include/"
+          sources=$(find "$temp/lua-5.5.0/src" -maxdepth 1 -name '*.c' ! -name lua.c ! -name luac.c ! -name onelua.c ! -name ltests.c -print)
           case "$RUNNER_OS" in
-            Linux) zig cc -O2 -fPIC -DLUA_USE_LINUX -shared $sources -lm -ldl -Wl,-soname,liblua.so.5.5 -o "$RUNNER_TEMP/lua55/lib/liblua.so.5.5"; ln -s liblua.so.5.5 "$RUNNER_TEMP/lua55/lib/liblua5.5.so"; library="$RUNNER_TEMP/lua55/lib/liblua.so.5.5" ;;
-            macOS) zig cc -O2 -fPIC -DLUA_USE_MACOSX -dynamiclib $sources -Wl,-install_name,@rpath/liblua5.5.dylib -o "$RUNNER_TEMP/lua55/lib/liblua5.5.dylib"; library="$RUNNER_TEMP/lua55/lib/liblua5.5.dylib" ;;
-            Windows) zig cc -O2 ${{ matrix.id == 'windows-aarch64' && '-target aarch64-windows-gnu' || '' }} -DLUA_BUILD_AS_DLL -shared $sources -Wl,--out-implib,"$RUNNER_TEMP/lua55/lib/liblua5.5.dll.a" -o "$RUNNER_TEMP/lua55/bin/lua5.5.dll"; library="$RUNNER_TEMP/lua55/bin/lua5.5.dll" ;;
+            Linux) zig cc -O2 -fPIC -DLUA_USE_LINUX -shared $sources -lm -ldl -Wl,-soname,liblua.so.5.5 -o "$temp/lua55/lib/liblua.so.5.5"; ln -s liblua.so.5.5 "$temp/lua55/lib/liblua5.5.so"; library="$temp/lua55/lib/liblua.so.5.5" ;;
+            macOS) zig cc -O2 -fPIC -DLUA_USE_MACOSX -dynamiclib $sources -Wl,-install_name,@rpath/liblua5.5.dylib -o "$temp/lua55/lib/liblua5.5.dylib"; library="$temp/lua55/lib/liblua5.5.dylib" ;;
+            Windows) zig cc -O2 ${{ matrix.id == 'windows-aarch64' && '-target aarch64-windows-gnu' || '' }} -DLUA_BUILD_AS_DLL -shared $sources -Wl,--out-implib,"$RUNNER_TEMP/lua55/lib/liblua5.5.dll.a" -o "$RUNNER_TEMP/lua55/bin/lua5.5.dll"; library="$temp/lua55/bin/lua5.5.dll" ;;
           esac
-          cat > "$RUNNER_TEMP/lua55/lib/pkgconfig/lua5.5.pc" <<EOF
-          prefix=$RUNNER_TEMP/lua55
+          cat > "$temp/lua55/lib/pkgconfig/lua5.5.pc" <<EOF
+          prefix=$temp/lua55
           libdir=\${prefix}/lib
           includedir=\${prefix}/include
           Name: Lua
@@ -97,10 +99,10 @@ jobs:
           Libs: -L\${libdir} -llua5.5
           Cflags: -I\${includedir}
           EOF
-          export PKG_CONFIG_PATH="$RUNNER_TEMP/lua55/lib/pkgconfig"
-          [[ "$RUNNER_OS" != Linux ]] || export LD_LIBRARY_PATH="$RUNNER_TEMP/lua55/lib"
-          [[ "$RUNNER_OS" != macOS ]] || export DYLD_LIBRARY_PATH="$RUNNER_TEMP/lua55/lib"
-          [[ "$RUNNER_OS" != Windows ]] || export PATH="$RUNNER_TEMP/lua55/bin:$PATH"
+          export PKG_CONFIG_PATH="$temp/lua55/lib/pkgconfig"
+          [[ "$RUNNER_OS" != Linux ]] || export LD_LIBRARY_PATH="$temp/lua55/lib"
+          [[ "$RUNNER_OS" != macOS ]] || export DYLD_LIBRARY_PATH="$temp/lua55/lib"
+          [[ "$RUNNER_OS" != Windows ]] || export PATH="$temp/lua55/bin:$PATH"
           zig build -Doptimize=ReleaseSafe ${{ matrix.id == 'windows-aarch64' && '-Dtarget=aarch64-windows-gnu' || '' }} -Dsystem-lua=true -Dlua-include="$RUNNER_TEMP/lua55/include" --search-prefix "$RUNNER_TEMP/lua55"
           cp "$library" zig-out/bin/
       - name: Compile
