@@ -5,12 +5,18 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
@@ -18,7 +24,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: { persist-credentials: false }
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: v2.9.3 }
       - name: Verify source
@@ -26,8 +34,10 @@ jobs:
           deno task check
           deno publish --dry-run
       - name: Verify tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version deno.json)"
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: test "$RELEASE_TAG" = "v$(jq -r .version deno.json)"
 
   build:
     needs: verify
@@ -45,7 +55,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: { persist-credentials: false }
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: v2.9.3 }
       - name: Compile
@@ -156,14 +168,14 @@ jobs:
           if ($forbidden) { throw "forbidden bundled runtime: $($forbidden.FullName)" }
           Compress-Archive -Path (Join-Path 'stage' $root) -DestinationPath "$root.zip"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
         with:
           name: agent-connector-${{ matrix.id }}
           path: agent-connector-v*-${{ matrix.id }}.*
           if-no-files-found: error
 
   publish-jsr:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-24.04
     environment: release
@@ -172,20 +184,24 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: { persist-credentials: false }
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: v2.9.3 }
-      - run: deno publish --frozen
+      - run: deno publish
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     needs: [build, publish-jsr]
     runs-on: ubuntu-24.04
     environment: release
     permissions: { contents: write }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: { persist-credentials: false }
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: agent-connector-*
@@ -203,6 +219,7 @@ jobs:
           sha256sum *.tar.gz *.zip > SHA256SUMS
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
