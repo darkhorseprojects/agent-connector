@@ -6,6 +6,7 @@ Their own license terms apply.
 ## Portable Agents
 
 - Package: `@darkhorseprojects/portable-agents`
+- Version: 0.1.3
 - License: AGPL-3.0-only
 - Source: https://github.com/darkhorseprojects/portable-agents
 

@@ -14,9 +14,9 @@ deployment details.
 
 ## Install and connect
 
-Install `agc` and `agent` into the same executable directory. Install Lua 5.5 with the operating system's package
-manager; Connector downloads do not include it. Install the built-in packages under the per-user application-data
-directory:
+Install `agc` and `agent` into the same executable directory. Provide an architecture-compatible Lua 5.5 shared library
+discoverable by the operating system's dynamic loader; Connector downloads do not include it. Install the built-in
+packages under the per-user application-data directory:
 
 | Platform | Package directory                                               |
 | -------- | --------------------------------------------------------------- |
