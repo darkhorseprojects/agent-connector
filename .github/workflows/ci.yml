@@ -67,7 +67,7 @@ jobs:
         run: |
           directory="$RUNNER_TEMP/portable-agents-release"
           asset="portable-agents-${PORTABLE_AGENTS_VERSION}-${{ matrix.id }}.tar.gz"
-          mkdir "$directory" portable-agents/zig-out/bin
+          mkdir -p "$directory" portable-agents/zig-out/bin
           gh release download "$PORTABLE_AGENTS_VERSION" --repo darkhorseprojects/portable-agents --pattern "$asset" --pattern SHA256SUMS --dir "$directory"
           if command -v sha256sum >/dev/null; then
             (cd "$directory" && grep -F "  $asset" SHA256SUMS | sha256sum -c -)
