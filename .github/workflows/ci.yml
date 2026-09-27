@@ -11,6 +11,7 @@ permissions:
 
 env:
   PORTABLE_AGENTS_COMMIT: 70fab4f1ecb98dbfa185054d338e9d0c18ea04ea
+  PORTABLE_AGENTS_VERSION: v0.1.2
 
 jobs:
   verify:
@@ -40,12 +41,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-26.04, id: linux-x86_64 }
-          - { os: ubuntu-26.04-arm, id: linux-aarch64 }
+          - { os: ubuntu-24.04, id: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, id: linux-aarch64 }
           - { os: macos-15-intel, id: macos-x86_64 }
           - { os: macos-15, id: macos-aarch64 }
-          - { os: windows-latest, id: windows-x86_64, target: x86_64-windows-gnu }
-          - { os: windows-11-arm, id: windows-aarch64, target: aarch64-windows-gnu }
+          - { os: windows-latest, id: windows-x86_64 }
+          - { os: windows-11-arm, id: windows-aarch64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -59,41 +60,38 @@ jobs:
           persist-credentials: false
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: v2.9.3 }
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
-        if: matrix.id != 'windows-aarch64'
-        with: { version: 0.16.0 }
-      - name: Install x86 Zig on Windows ARM
-        if: matrix.id == 'windows-aarch64'
-        shell: pwsh
-        run: |
-          $zip = Join-Path $env:RUNNER_TEMP 'zig-x64.zip'
-          Invoke-WebRequest 'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip' -OutFile $zip
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e') { throw 'Zig checksum mismatch' }
-          Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'zig-x64')
-          Join-Path $env:RUNNER_TEMP 'zig-x64/zig-x86_64-windows-0.16.0' | Out-File -FilePath $env:GITHUB_PATH -Append
-      - name: Install Lua on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes liblua5.5-dev pkgconf
-      - name: Install Lua on macOS
-        if: runner.os == 'macOS'
-        run: brew install lua pkgconf
-      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
-        if: runner.os == 'Windows'
-        with:
-          msystem: ${{ matrix.id == 'windows-aarch64' && 'CLANGARM64' || 'UCRT64' }}
-          path-type: inherit
-          update: true
-          pacboy: lua:p pkgconf:p
-      - name: Build Portable Agents on Unix
+      - name: Download Portable Agents on Unix
         if: runner.os != 'Windows'
         shell: bash
-        working-directory: portable-agents
-        run: zig build -Doptimize=ReleaseSafe
-      - name: Build Portable Agents on Windows
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          directory="$RUNNER_TEMP/portable-agents-release"
+          asset="portable-agents-${PORTABLE_AGENTS_VERSION}-${{ matrix.id }}.tar.gz"
+          mkdir "$directory" portable-agents/zig-out/bin
+          gh release download "$PORTABLE_AGENTS_VERSION" --repo darkhorseprojects/portable-agents --pattern "$asset" --pattern SHA256SUMS --dir "$directory"
+          if command -v sha256sum >/dev/null; then
+            (cd "$directory" && grep -F "  $asset" SHA256SUMS | sha256sum -c -)
+          else
+            (cd "$directory" && grep -F "  $asset" SHA256SUMS | shasum -a 256 -c -)
+          fi
+          tar -xOf "$directory/$asset" "${asset%.tar.gz}/agent" > portable-agents/zig-out/bin/agent
+          chmod +x portable-agents/zig-out/bin/agent
+      - name: Download Portable Agents on Windows
         if: runner.os == 'Windows'
-        shell: msys2 {0}
-        working-directory: portable-agents
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+        shell: pwsh
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'portable-agents-release'
+          $asset = "portable-agents-$env:PORTABLE_AGENTS_VERSION-${{ matrix.id }}.zip"
+          New-Item -ItemType Directory -Path $directory
+          gh release download $env:PORTABLE_AGENTS_VERSION --repo darkhorseprojects/portable-agents --pattern $asset --pattern SHA256SUMS --dir $directory
+          $expected = ((Get-Content (Join-Path $directory 'SHA256SUMS') | Where-Object { $_.EndsWith("  $asset") }) -split '\s+')[0]
+          $actual = (Get-FileHash (Join-Path $directory $asset) -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Portable Agents checksum mismatch' }
+          Expand-Archive (Join-Path $directory $asset) $directory
+          $bin = Join-Path $env:GITHUB_WORKSPACE 'portable-agents/zig-out/bin'
+          New-Item -ItemType Directory -Path $bin
+          Copy-Item (Get-ChildItem $directory -Filter agent.exe -Recurse | Select-Object -First 1) $bin
       - name: Compile
         working-directory: agent-connector
         run: deno task compile
