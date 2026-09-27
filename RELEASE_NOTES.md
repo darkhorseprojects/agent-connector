@@ -1,4 +1,4 @@
-# Agent Connector v0.1.0
+# Agent Connector v0.1.2
 
 First public release of `agc`, a Discord front end for
 [Portable Agents](https://github.com/darkhorseprojects/portable-agents). It routes authorized messages and `/agent`
@@ -14,9 +14,10 @@ itself.
   for the same policy, member, and channel.
 - Image-enabled policies accept bounded PNG, JPEG, and WebP attachments. Agent output is sent as completed Discord
   messages with mentions disabled. Diagnostics are bounded and profiling is opt-in.
-- Each download bundles the platform's `agc` and Portable Agents `agent` executables, the matching Lua 5.5 shared
-  library, built-in package assets, packaging examples, licenses, and third-party notices. The bundled Portable Agents
-  revision matches its `v0.1.1` release. No separate JSR SDK installation is needed to run the compiled binary.
+- Agent processes inherit Connector's environment unchanged, including loader paths and policy-defined variables.
+- Each download bundles the platform's `agc` executable, Portable Agents `agent` v0.1.2, built-in package assets,
+  packaging examples, licenses, and third-party notices. Lua is not bundled; install a system Lua 5.5 runtime before
+  running `agc`.
 
 ## Downloads
 
@@ -29,8 +30,9 @@ itself.
 | Windows x86-64      | `agent-connector-windows-x86_64.zip`   |
 | Windows ARM64       | `agent-connector-windows-aarch64.zip`  |
 
-Keep the executables and Lua library together. Install built-in packages under the per-user application-data directory
-described in the [README](https://github.com/darkhorseprojects/agent-connector#install-and-connect), then configure
-`ac.yaml` with explicit routes. To verify a download, compare its hash with `SHA256SUMS`. The
+Install Lua 5.5 through the operating system's package manager and keep `agc` and `agent` together. Install built-in
+packages under the per-user application-data directory described in the
+[README](https://github.com/darkhorseprojects/agent-connector#install-and-connect), then configure `ac.yaml` with
+explicit routes. To verify a download, compare its hash with `SHA256SUMS`. The
 [wiki](https://github.com/darkhorseprojects/agent-connector/wiki) covers policy configuration, routing, Discord
 permissions, and deployment.

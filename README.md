@@ -14,8 +14,9 @@ deployment details.
 
 ## Install and connect
 
-Install `agc`, `agent`, and the included Lua 5.5 shared library into the same executable directory. Install the built-in
-packages under the per-user application-data directory:
+Install `agc` and `agent` into the same executable directory. Install Lua 5.5 with the operating system's package
+manager; Connector downloads do not include it. Install the built-in packages under the per-user application-data
+directory:
 
 | Platform | Package directory                                               |
 | -------- | --------------------------------------------------------------- |
@@ -73,6 +74,7 @@ complete configuration reference and routing precedence.
   not retained for follow-up turns.
 - Completed assistant turns are sent as Discord messages; Connector does not publish provisional text. Mentions are
   disabled in agent output.
+- Agent child processes inherit Connector's environment unchanged.
 - Bounded metadata-only diagnostics are stored locally. Profiling is opt-in.
 
 ## Development
@@ -81,14 +83,14 @@ Connector builds against the sibling `../portable-agents` workspace and binary:
 
 ```sh
 cd ../portable-agents
-zig build -Doptimize=ReleaseSafe -Dsystem-lua=true -Dlua-include=/path/to/lua/include --search-prefix /path/to/lua
+zig build -Doptimize=ReleaseSafe
 cd ../agent-connector
 deno task check
 deno task compile
 ```
 
-PA and package native modules require an ABI-compatible dynamic Lua 5.5 runtime. The compiled distribution includes the
-required Lua library and licenses/notices; standalone builds also require the native keyring addon.
+PA and package native modules require the same ABI-compatible system Lua 5.5 runtime. The compiled distribution does not
+include Lua; standalone builds also require the native keyring addon.
 
 ## Learn more
 

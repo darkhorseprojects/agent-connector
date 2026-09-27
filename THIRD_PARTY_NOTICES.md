@@ -54,7 +54,9 @@ Their exact versions and integrity hashes are recorded in `deno.lock`.
 - License: MIT
 - Source: https://github.com/Effect-TS/effect
 
-## Lua 5.5
+## Lua 5.5 runtime
+
+Lua is an external runtime dependency and is not included in Agent Connector downloads.
 
 - Copyright (C) 1994-2025 Lua.org, PUC-Rio
 - License: MIT

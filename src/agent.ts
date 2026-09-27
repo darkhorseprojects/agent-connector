@@ -38,15 +38,6 @@ function discordSourceDir(): string {
   return join(data, "agent-connector", "packages", "discord");
 }
 
-function environment() {
-  const home = Deno.env.get(Deno.build.os === "windows" ? "USERPROFILE" : "HOME");
-  const systemRoot = Deno.build.os === "windows" ? Deno.env.get("SystemRoot") : undefined;
-  return {
-    ...(home === undefined ? {} : { HOME: home }),
-    ...(systemRoot === undefined ? {} : { SystemRoot: systemRoot }),
-  };
-}
-
 function makePolicyAgent(policy: Policy) {
   return makeAgent({
     executable: agentExecutable(),
@@ -55,7 +46,6 @@ function makePolicyAgent(policy: Policy) {
     memoryBytes: policy.memoryBytes,
     instructions: policy.instructions,
     cwd: policy.directory,
-    environment: environment(),
   });
 }
 
@@ -65,8 +55,6 @@ export function checkAgent(policy: Policy) {
       const output = await new Deno.Command(agentExecutable(), {
         args: ["check", policy.sourceDir, policy.entryModule],
         cwd: policy.directory,
-        env: environment(),
-        clearEnv: true,
         stdin: "null",
         stdout: "null",
         stderr: "piped",

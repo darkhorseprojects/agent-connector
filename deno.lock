@@ -322,7 +322,7 @@
       "npm:effect@4.0.0-rc.113"
     ],
     "links": {
-      "jsr:@darkhorseprojects/portable-agents@0.1.1": {
+      "jsr:@darkhorseprojects/portable-agents@0.1.2": {
         "dependencies": [
           "npm:effect@4.0.0-rc.113"
         ]
