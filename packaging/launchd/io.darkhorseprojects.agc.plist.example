@@ -6,10 +6,15 @@
   <string>io.darkhorseprojects.agc</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/absolute/path/agc</string>
+    <string>/absolute/path/to/agc</string>
     <string>run</string>
-    <string>/absolute/path/to/agent</string>
+    <string>/absolute/path/to/config</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/absolute/path/to/bin:/usr/local/bin:/usr/bin</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

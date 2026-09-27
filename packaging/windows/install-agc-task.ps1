@@ -3,14 +3,14 @@ param(
     [string]$Executable,
 
     [Parameter(Mandatory = $true)]
-    [string]$AgentDirectory,
+    [string]$ConfigDirectory,
 
     [string]$TaskName = "Agent Connector"
 )
 
 $Executable = (Resolve-Path -LiteralPath $Executable).Path
-$AgentDirectory = (Resolve-Path -LiteralPath $AgentDirectory).Path
-$Action = New-ScheduledTaskAction -Execute $Executable -Argument ('run "{0}"' -f $AgentDirectory.Replace('"', '""'))
+$ConfigDirectory = (Resolve-Path -LiteralPath $ConfigDirectory).Path
+$Action = New-ScheduledTaskAction -Execute $Executable -Argument ('run "{0}"' -f $ConfigDirectory.Replace('"', '""'))
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Settings = New-ScheduledTaskSettingsSet -RestartCount 10 -RestartInterval (New-TimeSpan -Seconds 5)
 

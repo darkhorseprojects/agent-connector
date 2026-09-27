@@ -1,7 +1,7 @@
 import manifest from "../deno.json" with { type: "json" };
 import { join, resolve } from "@std/path";
 import { Cause, Effect, Exit } from "effect";
-import { checkAgent } from "./agent.ts";
+import { checkAgent, materializeDiscordPackage } from "./agent.ts";
 import { emptyConfig, parseConfig } from "./config.ts";
 import { runConnector } from "./connector.ts";
 import {
@@ -55,6 +55,7 @@ async function settings(path: string) {
 
 async function check(path: string): Promise<void> {
   const config = parseConfig(await Deno.readTextFile(join(path, CONFIG)), path);
+  if (Object.values(config.policies).some((policy) => policy.discord)) await materializeDiscordPackage();
   for (const [name, policy] of Object.entries(config.policies)) {
     await Effect.runPromise(checkAgent(policy));
     console.log(`${name}: ${policy.sourceDir}#${policy.entryModule}`);
@@ -63,6 +64,7 @@ async function check(path: string): Promise<void> {
 
 async function run(path: string): Promise<void> {
   const config = await settings(path);
+  if (Object.values(config.policies).some((policy) => policy.discord)) await materializeDiscordPackage();
   for (const policy of Object.values(config.policies)) await Effect.runPromise(checkAgent(policy));
   const controller = new AbortController();
   const stop = () => controller.abort(new Error("Agent Connector interrupted"));

@@ -3,10 +3,10 @@
 Agent Connector's compiled executable includes JavaScript and TypeScript from the dependencies pinned in `deno.lock`.
 Their own license terms apply.
 
-## Portable Agents
+## Portable Agents SDK
 
 - Package: `@darkhorseprojects/portable-agents`
-- Version: 0.1.3
+- Version: 0.1.4
 - License: AGPL-3.0-only
 - Source: https://github.com/darkhorseprojects/portable-agents
 
@@ -54,14 +54,6 @@ Their exact versions and integrity hashes are recorded in `deno.lock`.
 - Packages: `effect`, `@effect/platform-node`, and `@effect/platform-node-shared`
 - License: MIT
 - Source: https://github.com/Effect-TS/effect
-
-## Lua 5.5 runtime
-
-Lua is an external runtime dependency and is not included in Agent Connector downloads.
-
-- Copyright (C) 1994-2025 Lua.org, PUC-Rio
-- License: MIT
-- Source and license: https://www.lua.org/license.html
 
 ## lunajson
 

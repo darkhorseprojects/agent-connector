@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/absolute/path/agc run /absolute/path/to/agent
+Environment=PATH=/absolute/path/to/bin:/usr/local/bin:/usr/bin
+ExecStart=/absolute/path/to/agc run /absolute/path/to/config
 Restart=on-failure
 RestartSec=5
 

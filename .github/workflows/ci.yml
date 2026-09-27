@@ -9,31 +9,25 @@ on:
 permissions:
   contents: read
 
-env:
-  PORTABLE_AGENTS_COMMIT: 189520ae5c79cec729e03b799138efff604534d7
-  PORTABLE_AGENTS_VERSION: v0.1.3
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: { path: agent-connector, persist-credentials: false }
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: darkhorseprojects/portable-agents
-          ref: ${{ env.PORTABLE_AGENTS_COMMIT }}
-          path: portable-agents
-          persist-credentials: false
+        with: { persist-credentials: false }
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: v2.9.3 }
       - name: Verify source
-        working-directory: agent-connector
-        shell: bash
         run: |
-          deno fmt --check
-          deno lint
-          deno check src/main.ts
+          deno task check
+          deno publish --dry-run
+      - name: Verify tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version deno.json)"
 
   build:
     needs: verify
@@ -51,60 +45,141 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: { path: agent-connector, persist-credentials: false }
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: darkhorseprojects/portable-agents
-          ref: ${{ env.PORTABLE_AGENTS_COMMIT }}
-          path: portable-agents
-          persist-credentials: false
+        with: { persist-credentials: false }
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: v2.9.3 }
-      - name: Download Portable Agents on Unix
+      - name: Compile
+        run: deno task compile
+      - name: Test and package on Unix
         if: runner.os != 'Windows'
         shell: bash
-        env: { GH_TOKEN: "${{ github.token }}" }
+        env:
+          TARGET_ID: ${{ matrix.id }}
         run: |
-          directory="$RUNNER_TEMP/portable-agents-release"
-          asset="portable-agents-${PORTABLE_AGENTS_VERSION}-${{ matrix.id }}.tar.gz"
-          mkdir -p "$directory" portable-agents/zig-out/bin
-          gh release download "$PORTABLE_AGENTS_VERSION" --repo darkhorseprojects/portable-agents --pattern "$asset" --pattern SHA256SUMS --dir "$directory"
-          if command -v sha256sum >/dev/null; then
-            (cd "$directory" && grep -F "  $asset" SHA256SUMS | sha256sum -c -)
+          set -euo pipefail
+          version=$(jq -r .version deno.json)
+          test "$(dist/agc --version)" = "$version"
+
+          test_root="$RUNNER_TEMP/agent-connector-test"
+          mkdir -p "$test_root/bin" "$test_root/config/package" "$test_root/home" "$test_root/data"
+          printf 'return {}\n' > "$test_root/config/package/entry.lua"
+          cat > "$test_root/bin/agent" <<'EOF'
+          #!/bin/sh
+          printf '%s\n' "$@" "$PA_ENV_TEST" > "$AGENT_TEST_OUTPUT"
+          EOF
+          chmod +x "$test_root/bin/agent"
+          cat > "$test_root/config/ac.yaml" <<'EOF'
+          version: 1
+          policies:
+            test:
+              source: package
+              entry: entry
+              memory_bytes: 1048576
+              discord: true
+              config: {}
+          members: {}
+          channels: {}
+          guilds: {}
+          EOF
+          PATH="$test_root/bin:$PATH" HOME="$test_root/home" XDG_DATA_HOME="$test_root/data" \
+            AGENT_TEST_OUTPUT="$test_root/result" PA_ENV_TEST=inherited-verbatim \
+            dist/agc check "$test_root/config"
+          grep -Fx 'check' "$test_root/result"
+          grep -Fx 'inherited-verbatim' "$test_root/result"
+          if [[ "$(uname -s)" == Darwin ]]; then
+            package="$test_root/home/Library/Application Support/Agent Connector/packages/discord"
           else
-            (cd "$directory" && grep -F "  $asset" SHA256SUMS | shasum -a 256 -c -)
+            package="$test_root/data/agent-connector/packages/discord"
           fi
-          tar -xOf "$directory/$asset" "${asset%.tar.gz}/agent" > portable-agents/zig-out/bin/agent
-          chmod +x portable-agents/zig-out/bin/agent
-      - name: Download Portable Agents on Windows
+          for path in discord.md lunajson/decoder.lua lunajson/encoder.lua; do
+            cmp "packages/discord/$path" "$package/$path"
+          done
+
+          root="agent-connector-v${version}-${TARGET_ID}"
+          mkdir -p "stage/$root"
+          cp -a dist/. "stage/$root/"
+          test -x "stage/$root/agc"
+          ! find "stage/$root" -type f | grep -Ei '/(agent|agent\.exe|lua[^/]*|zinc[^/]*)$'
+          tar -C stage -czf "$root.tar.gz" "$root"
+          tar -tvzf "$root.tar.gz" | awk '$NF ~ /\/agc$/ { if (substr($1,4,1) != "x") exit 1; found=1 } END { exit !found }'
+      - name: Test and package on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        env: { GH_TOKEN: "${{ github.token }}" }
+        env:
+          TARGET_ID: ${{ matrix.id }}
         run: |
-          $directory = Join-Path $env:RUNNER_TEMP 'portable-agents-release'
-          $asset = "portable-agents-$env:PORTABLE_AGENTS_VERSION-${{ matrix.id }}.zip"
-          New-Item -ItemType Directory -Path $directory
-          gh release download $env:PORTABLE_AGENTS_VERSION --repo darkhorseprojects/portable-agents --pattern $asset --pattern SHA256SUMS --dir $directory
-          $expected = ((Get-Content (Join-Path $directory 'SHA256SUMS') | Where-Object { $_.EndsWith("  $asset") }) -split '\s+')[0]
-          $actual = (Get-FileHash (Join-Path $directory $asset) -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw 'Portable Agents checksum mismatch' }
-          Expand-Archive (Join-Path $directory $asset) $directory
-          $bin = Join-Path $env:GITHUB_WORKSPACE 'portable-agents/zig-out/bin'
-          New-Item -ItemType Directory -Path $bin
-          Copy-Item (Get-ChildItem $directory -Filter agent.exe -Recurse | Select-Object -First 1) $bin
-      - name: Compile
-        working-directory: agent-connector
-        run: deno task compile
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content deno.json | ConvertFrom-Json).version
+          if ((& .\dist\agc.exe --version) -ne $version) { throw 'version mismatch' }
+
+          $testRoot = Join-Path $env:RUNNER_TEMP 'agent-connector-test'
+          $bin = Join-Path $testRoot 'bin'
+          $config = Join-Path $testRoot 'config'
+          New-Item -ItemType Directory -Force -Path $bin, (Join-Path $config 'package'), (Join-Path $testRoot 'data') | Out-Null
+          Set-Content -NoNewline -Path (Join-Path $config 'package/entry.lua') -Value "return {}`n"
+          @'
+          await Deno.writeTextFile(Deno.env.get("AGENT_TEST_OUTPUT")!, JSON.stringify({ args: Deno.args, inherited: Deno.env.get("PA_ENV_TEST") }));
+          '@ | Set-Content -Path (Join-Path $testRoot 'agent.ts')
+          deno compile --quiet --allow-env=AGENT_TEST_OUTPUT,PA_ENV_TEST --allow-write --output (Join-Path $bin 'agent.exe') (Join-Path $testRoot 'agent.ts')
+          @'
+          version: 1
+          policies:
+            test:
+              source: package
+              entry: entry
+              memory_bytes: 1048576
+              discord: true
+              config: {}
+          members: {}
+          channels: {}
+          guilds: {}
+          '@ | Set-Content -Path (Join-Path $config 'ac.yaml')
+          $env:PATH = "$bin;$env:PATH"
+          $env:LOCALAPPDATA = Join-Path $testRoot 'data'
+          $env:AGENT_TEST_OUTPUT = Join-Path $testRoot 'result'
+          $env:PA_ENV_TEST = 'inherited-verbatim'
+          & .\dist\agc.exe check $config
+          $result = Get-Content -Raw $env:AGENT_TEST_OUTPUT | ConvertFrom-Json
+          if ($result.args[0] -ne 'check' -or $result.args[2] -ne 'entry') { throw 'agent was not invoked through PATH' }
+          if ($result.inherited -ne 'inherited-verbatim') { throw 'environment was not inherited' }
+          $package = Join-Path $env:LOCALAPPDATA 'Agent Connector/packages/discord'
+          foreach ($path in @('discord.md', 'lunajson/decoder.lua', 'lunajson/encoder.lua')) {
+            $source = (Get-FileHash (Join-Path 'packages/discord' $path) -Algorithm SHA256).Hash
+            $actual = (Get-FileHash (Join-Path $package $path) -Algorithm SHA256).Hash
+            if ($source -ne $actual) { throw "Discord package mismatch: $path" }
+          }
+
+          $root = "agent-connector-v$version-$env:TARGET_ID"
+          New-Item -ItemType Directory -Force -Path (Join-Path 'stage' $root) | Out-Null
+          Copy-Item -Recurse -Path 'dist/*' -Destination (Join-Path 'stage' $root)
+          $forbidden = Get-ChildItem (Join-Path 'stage' $root) -Recurse -File | Where-Object { $_.Name -match '^(agent(\.exe)?|lua[^/]*|zinc[^/]*)$' }
+          if ($forbidden) { throw "forbidden bundled runtime: $($forbidden.FullName)" }
+          Compress-Archive -Path (Join-Path 'stage' $root) -DestinationPath "$root.zip"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: agent-connector-${{ matrix.id }}
-          path: agent-connector/dist
+          path: agent-connector-v*-${{ matrix.id }}.*
           if-no-files-found: error
+
+  publish-jsr:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with: { deno-version: v2.9.3 }
+      - run: deno publish --frozen
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, publish-jsr]
     runs-on: ubuntu-24.04
     environment: release
     permissions: { contents: write }
@@ -112,17 +187,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: { persist-credentials: false }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with: { pattern: agent-connector-*, path: artifacts }
-      - name: Archive
+        with:
+          pattern: agent-connector-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify archives
         working-directory: artifacts
+        shell: bash
         run: |
-          for directory in agent-connector-*; do
-            case "$directory" in
-              *-windows-*) zip -qr "$directory.zip" "$directory" ;;
-              *) tar -czf "$directory.tar.gz" "$directory" ;;
-            esac
+          set -euo pipefail
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 6
+          for archive in *.tar.gz; do
+            tar -tvzf "$archive" | awk '$NF ~ /\/agc$/ { if (substr($1,4,1) != "x") exit 1; found=1 } END { exit !found }'
           done
-          sha256sum agent-connector-*.tar.gz agent-connector-*.zip > SHA256SUMS
+          sha256sum *.tar.gz *.zip > SHA256SUMS
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           files: |

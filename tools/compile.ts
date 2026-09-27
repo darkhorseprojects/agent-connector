@@ -1,11 +1,7 @@
-import { copy } from "@std/fs";
-import { fromFileUrl, join } from "@std/path";
+import { dirname, fromFileUrl, join } from "@std/path";
 
 const root = fromFileUrl(new URL("..", import.meta.url));
-const portableRoot = fromFileUrl(new URL("../../portable-agents", import.meta.url));
-const executableName = Deno.build.os === "windows" ? "agent.exe" : "agent";
 const output = join(root, "dist", Deno.build.os === "windows" ? "agc.exe" : "agc");
-const agentOutput = join(root, "dist", executableName);
 
 await Deno.remove(join(root, "dist"), { recursive: true }).catch((error) => {
   if (!(error instanceof Deno.errors.NotFound)) throw error;
@@ -22,6 +18,8 @@ const status = await new Deno.Command(Deno.execPath(), {
     "--allow-run",
     "--allow-env",
     "--allow-ffi",
+    "--include",
+    "packages/discord",
     "--output",
     output,
     "src/main.ts",
@@ -31,22 +29,27 @@ const status = await new Deno.Command(Deno.execPath(), {
   stderr: "inherit",
 }).output();
 if (!status.success) throw new Error(`deno compile failed with status ${status.code}`);
-await copy(join(portableRoot, "zig-out", "bin", executableName), agentOutput);
-await copy(join(portableRoot, "LICENSE"), join(root, "dist", "PORTABLE_AGENTS_LICENSE"));
-await copy(join(root, "packages"), join(root, "dist", "packages"));
-await copy(join(root, "packaging"), join(root, "dist", "packaging"));
-for (const name of ["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"]) {
-  await copy(join(root, name), join(root, "dist", name));
+for (
+  const path of [
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "packaging/systemd/agc.service.example",
+    "packaging/launchd/io.darkhorseprojects.agc.plist.example",
+    "packaging/windows/install-agc-task.ps1",
+    "packaging/windows/remove-agc-task.ps1",
+  ]
+) {
+  const destination = join(root, "dist", path);
+  await Deno.mkdir(dirname(destination), { recursive: true });
+  await Deno.copyFile(join(root, path), destination);
 }
 for (
   const path of [
     output,
-    agentOutput,
-    join(root, "dist", "packages", "discord", "discord.md"),
     join(root, "dist", "LICENSE"),
     join(root, "dist", "README.md"),
     join(root, "dist", "THIRD_PARTY_NOTICES.md"),
-    join(root, "dist", "PORTABLE_AGENTS_LICENSE"),
     join(root, "dist", "packaging", "systemd", "agc.service.example"),
     join(root, "dist", "packaging", "launchd", "io.darkhorseprojects.agc.plist.example"),
     join(root, "dist", "packaging", "windows", "install-agc-task.ps1"),

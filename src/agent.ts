@@ -2,7 +2,7 @@ import * as NodeChildProcessSpawner from "@effect/platform-node/child-process";
 import * as NodeFileSystem from "@effect/platform-node/file-system";
 import * as NodePath from "@effect/platform-node/path";
 import { type Import, make as makeAgent } from "@darkhorseprojects/portable-agents";
-import { dirname, fromFileUrl, isAbsolute, join } from "@std/path";
+import { dirname, isAbsolute, join } from "@std/path";
 import { Effect, Layer, Stream } from "effect";
 import { invocationConfig, type InvocationContext, type Policy } from "./config.ts";
 import type { DiscordGrant } from "./discord/rpc.ts";
@@ -15,14 +15,10 @@ const processLayer = Layer.provideMerge(
 );
 
 export function agentExecutable(): string {
-  const name = Deno.build.os === "windows" ? "agent.exe" : "agent";
-  return Deno.build.standalone
-    ? join(dirname(Deno.execPath()), name)
-    : fromFileUrl(new URL("../../portable-agents/zig-out/bin/" + name, import.meta.url));
+  return "agent";
 }
 
 function discordSourceDir(): string {
-  if (!Deno.build.standalone) return fromFileUrl(new URL("../packages/discord", import.meta.url));
   const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
   if (Deno.build.os === "windows") {
     const data = Deno.env.get("LOCALAPPDATA");
@@ -36,6 +32,24 @@ function discordSourceDir(): string {
   const configured = Deno.env.get("XDG_DATA_HOME");
   const data = configured && isAbsolute(configured) ? configured : join(home, ".local", "share");
   return join(data, "agent-connector", "packages", "discord");
+}
+
+export async function materializeDiscordPackage(): Promise<void> {
+  const destination = discordSourceDir();
+  for (const path of ["discord.md", "lunajson/decoder.lua", "lunajson/encoder.lua"]) {
+    const source = await Deno.readFile(new URL(`../packages/discord/${path}`, import.meta.url));
+    const output = join(destination, path);
+    await Deno.mkdir(dirname(output), { recursive: true });
+    let current: Uint8Array | undefined;
+    try {
+      current = await Deno.readFile(output);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+    if (!current || current.length !== source.length || current.some((byte, index) => byte !== source[index])) {
+      await Deno.writeFile(output, source);
+    }
+  }
 }
 
 function makePolicyAgent(policy: Policy) {

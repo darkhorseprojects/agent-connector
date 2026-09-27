@@ -1,10 +1,9 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@std/fs@1.0.24": "1.0.24",
+    "jsr:@darkhorseprojects/portable-agents@~0.1.4": "0.1.4",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@1.1.6": "1.1.6",
-    "jsr:@std/path@^1.1.5": "1.1.6",
     "jsr:@std/yaml@1.2.0": "1.2.0",
     "npm:@effect/platform-node@4.0.0-rc.113": "4.0.0-rc.113_effect@4.0.0-rc.113_redis@6.2.1",
     "npm:@napi-rs/keyring@2.1.0": "2.1.0",
@@ -12,11 +11,10 @@
     "npm:effect@4.0.0-rc.113": "4.0.0-rc.113"
   },
   "jsr": {
-    "@std/fs@1.0.24": {
-      "integrity": "f3061b45b81673a2bece689da041df32d174be064c89eb6397fb5718d3fb7877",
+    "@darkhorseprojects/portable-agents@0.1.4": {
+      "integrity": "4662ea27ac94f2e59710ce670824f5202fc8c389060acba8268aa17621d16278",
       "dependencies": [
-        "jsr:@std/internal",
-        "jsr:@std/path@^1.1.5"
+        "npm:effect"
       ]
     },
     "@std/internal@1.0.14": {
@@ -313,20 +311,13 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@std/fs@1.0.24",
+      "jsr:@darkhorseprojects/portable-agents@~0.1.4",
       "jsr:@std/path@1.1.6",
       "jsr:@std/yaml@1.2.0",
       "npm:@effect/platform-node@4.0.0-rc.113",
       "npm:@napi-rs/keyring@2.1.0",
       "npm:discord.js@14.27.0",
       "npm:effect@4.0.0-rc.113"
-    ],
-    "links": {
-      "jsr:@darkhorseprojects/portable-agents@0.1.3": {
-        "dependencies": [
-          "npm:effect@4.0.0-rc.113"
-        ]
-      }
-    }
+    ]
   }
 }
