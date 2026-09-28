@@ -1,6 +1,6 @@
 {
   "name": "@darkhorseprojects/agent-connector",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "AGPL-3.0-only",
   "exports": "./src/main.ts",
   "tasks": {
@@ -8,7 +8,7 @@
     "compile": "deno run --frozen --allow-read --allow-write --allow-run tools/compile.ts"
   },
   "imports": {
-    "@darkhorseprojects/portable-agents": "jsr:@darkhorseprojects/portable-agents@^0.1.4",
+    "@darkhorseprojects/portable-agents": "jsr:@darkhorseprojects/portable-agents@^0.1.5",
     "@effect/platform-node/child-process": "npm:@effect/platform-node@4.0.0-rc.113/NodeChildProcessSpawner",
     "@effect/platform-node/file-system": "npm:@effect/platform-node@4.0.0-rc.113/NodeFileSystem",
     "@effect/platform-node/path": "npm:@effect/platform-node@4.0.0-rc.113/NodePath",

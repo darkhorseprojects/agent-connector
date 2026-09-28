@@ -1,12 +1,8 @@
-# Agent Connector v0.1.4
+# Agent Connector v0.1.5
 
-Agent Connector is now independently installable from JSR and resolves `agent` through `PATH`. It no longer bundles,
-installs, or manages Portable Agents. The standalone archives contain `agc`, deployment examples, licenses, and notices;
-they contain neither `agent` nor Lua.
-
-The private Discord package is embedded in `agc` and materialized idempotently in the user's application-data directory
-when a Discord-enabled policy is checked or run. Agent Connector does not install or manage Zinc or any other agent
-package.
+This release is built against Portable Agents SDK 0.1.5. Native CI checks `agent` lookup through `PATH`, inherited
+environment, and Discord package installation on all six platforms. The GitHub archives are published and verified
+before the JSR package. Connector still does not bundle `agent`, Lua, Zinc, or another agent package.
 
 ## Install
 
@@ -15,19 +11,19 @@ Install the JSR CLI:
 ```sh
 deno install --global --name agc \
   --allow-env --allow-ffi --allow-net --allow-read --allow-run=agent --allow-write \
-  jsr:@darkhorseprojects/agent-connector@^0.1.4
+  jsr:@darkhorseprojects/agent-connector@^0.1.5
 ```
 
 Or download a standalone archive:
 
 | Platform            | Asset                                         |
 | ------------------- | --------------------------------------------- |
-| Linux x86-64        | `agent-connector-v0.1.4-linux-x86_64.tar.gz`  |
-| Linux ARM64         | `agent-connector-v0.1.4-linux-aarch64.tar.gz` |
-| macOS Intel         | `agent-connector-v0.1.4-macos-x86_64.tar.gz`  |
-| macOS Apple Silicon | `agent-connector-v0.1.4-macos-aarch64.tar.gz` |
-| Windows x86-64      | `agent-connector-v0.1.4-windows-x86_64.zip`   |
-| Windows ARM64       | `agent-connector-v0.1.4-windows-aarch64.zip`  |
+| Linux x86-64        | `agent-connector-v0.1.5-linux-x86_64.tar.gz`  |
+| Linux ARM64         | `agent-connector-v0.1.5-linux-aarch64.tar.gz` |
+| macOS Intel         | `agent-connector-v0.1.5-macos-x86_64.tar.gz`  |
+| macOS Apple Silicon | `agent-connector-v0.1.5-macos-aarch64.tar.gz` |
+| Windows x86-64      | `agent-connector-v0.1.5-windows-x86_64.zip`   |
+| Windows ARM64       | `agent-connector-v0.1.5-windows-aarch64.zip`  |
 
 Install Portable Agents independently. Its `agent` executable must be on `PATH`, and its compatible Lua 5.5 shared
 library must be visible to the operating system's dynamic loader. Agent processes inherit Connector's environment

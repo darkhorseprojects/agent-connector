@@ -16,8 +16,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: ${{ inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   verify:
@@ -52,7 +52,7 @@ jobs:
           - { os: windows-latest, id: windows-x86_64 }
           - { os: windows-11-arm, id: windows-aarch64 }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -62,16 +62,13 @@ jobs:
         with: { deno-version: v2.9.3 }
       - name: Compile
         run: deno task compile
-      - name: Test and package on Unix
+      - name: Test on Unix
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          TARGET_ID: ${{ matrix.id }}
         run: |
           set -euo pipefail
           version=$(jq -r .version deno.json)
           test "$(dist/agc --version)" = "$version"
-
           test_root="$RUNNER_TEMP/agent-connector-test"
           mkdir -p "$test_root/bin" "$test_root/config/package" "$test_root/home" "$test_root/data"
           printf 'return {}\n' > "$test_root/config/package/entry.lua"
@@ -106,24 +103,13 @@ jobs:
           for path in discord.md lunajson/decoder.lua lunajson/encoder.lua; do
             cmp "packages/discord/$path" "$package/$path"
           done
-
-          root="agent-connector-v${version}-${TARGET_ID}"
-          mkdir -p "stage/$root"
-          cp -a dist/. "stage/$root/"
-          test -x "stage/$root/agc"
-          ! find "stage/$root" -type f | grep -Ei '/(agent|agent\.exe|lua[^/]*|zinc[^/]*)$'
-          tar -C stage -czf "$root.tar.gz" "$root"
-          tar -tvzf "$root.tar.gz" | awk '$NF ~ /\/agc$/ { if (substr($1,4,1) != "x") exit 1; found=1 } END { exit !found }'
-      - name: Test and package on Windows
+      - name: Test on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          TARGET_ID: ${{ matrix.id }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = (Get-Content deno.json | ConvertFrom-Json).version
+          $version = (Get-Content deno.json -Raw | ConvertFrom-Json).version
           if ((& .\dist\agc.exe --version) -ne $version) { throw 'version mismatch' }
-
           $testRoot = Join-Path $env:RUNNER_TEMP 'agent-connector-test'
           $bin = Join-Path $testRoot 'bin'
           $config = Join-Path $testRoot 'config'
@@ -151,6 +137,7 @@ jobs:
           $env:AGENT_TEST_OUTPUT = Join-Path $testRoot 'result'
           $env:PA_ENV_TEST = 'inherited-verbatim'
           & .\dist\agc.exe check $config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $result = Get-Content -Raw $env:AGENT_TEST_OUTPUT | ConvertFrom-Json
           if ($result.args[0] -ne 'check' -or $result.args[2] -ne 'entry') { throw 'agent was not invoked through PATH' }
           if ($result.inherited -ne 'inherited-verbatim') { throw 'environment was not inherited' }
@@ -160,13 +147,62 @@ jobs:
             $actual = (Get-FileHash (Join-Path $package $path) -Algorithm SHA256).Hash
             if ($source -ne $actual) { throw "Discord package mismatch: $path" }
           }
-
+      - name: Package on Unix
+        if: runner.os != 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version deno.json)
+          root="agent-connector-v${version}-${TARGET_ID}"
+          mkdir -p "stage/$root"
+          cp -a dist/. "stage/$root/"
+          for path in agc LICENSE README.md THIRD_PARTY_NOTICES.md packaging/systemd/agc.service.example packaging/launchd/io.darkhorseprojects.agc.plist.example packaging/windows/install-agc-task.ps1 packaging/windows/remove-agc-task.ps1; do
+            test -f "stage/$root/$path"
+          done
+          test -x "stage/$root/agc"
+          ! find "stage/$root" -type f | grep -Ei '/(agent|agent[.]exe|lua[^/]*|zinc[^/]*)$'
+          tar -C stage -czf "$root.tar.gz" "$root"
+          mkdir verify-archive
+          tar -xzf "$root.tar.gz" -C verify-archive
+          test -x "verify-archive/$root/agc"
+          ! find "verify-archive/$root" -type f | grep -Ei '/(agent|agent[.]exe|lua[^/]*|zinc[^/]*)$'
+      - name: Package on Windows
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content deno.json -Raw | ConvertFrom-Json).version
           $root = "agent-connector-v$version-$env:TARGET_ID"
           New-Item -ItemType Directory -Force -Path (Join-Path 'stage' $root) | Out-Null
           Copy-Item -Recurse -Path 'dist/*' -Destination (Join-Path 'stage' $root)
+          foreach ($path in @(
+            'agc.exe', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md',
+            'packaging/systemd/agc.service.example',
+            'packaging/launchd/io.darkhorseprojects.agc.plist.example',
+            'packaging/windows/install-agc-task.ps1',
+            'packaging/windows/remove-agc-task.ps1'
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path "stage/$root" $path) -PathType Leaf)) { throw "missing archive input: $path" }
+          }
           $forbidden = Get-ChildItem (Join-Path 'stage' $root) -Recurse -File | Where-Object { $_.Name -match '^(agent(\.exe)?|lua[^/]*|zinc[^/]*)$' }
           if ($forbidden) { throw "forbidden bundled runtime: $($forbidden.FullName)" }
           Compress-Archive -Path (Join-Path 'stage' $root) -DestinationPath "$root.zip"
+          Expand-Archive "$root.zip" verify-archive
+          foreach ($path in @(
+            'agc.exe', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md',
+            'packaging/systemd/agc.service.example',
+            'packaging/launchd/io.darkhorseprojects.agc.plist.example',
+            'packaging/windows/install-agc-task.ps1',
+            'packaging/windows/remove-agc-task.ps1'
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path "verify-archive/$root" $path) -PathType Leaf)) { throw "invalid archive: $path" }
+          }
+          $forbidden = Get-ChildItem (Join-Path 'verify-archive' $root) -Recurse -File | Where-Object { $_.Name -match '^(agent(\.exe)?|lua[^/]*|zinc[^/]*)$' }
+          if ($forbidden) { throw "forbidden archived runtime: $($forbidden.FullName)" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
         with:
@@ -174,26 +210,9 @@ jobs:
           path: agent-connector-v*-${{ matrix.id }}.*
           if-no-files-found: error
 
-  publish-jsr:
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
-    needs: build
-    runs-on: ubuntu-24.04
-    environment: release
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ inputs.release_tag || github.ref }}
-          persist-credentials: false
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
-        with: { deno-version: v2.9.3 }
-      - run: deno publish
-
   release:
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
-    needs: [build, publish-jsr]
+    needs: build
     runs-on: ubuntu-24.04
     environment: release
     permissions: { contents: write }
@@ -207,17 +226,44 @@ jobs:
           pattern: agent-connector-*
           path: artifacts
           merge-multiple: true
-      - name: Verify archives
+      - name: Verify release assets
         working-directory: artifacts
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 6
-          for archive in *.tar.gz; do
+          version=$(jq -r .version ../deno.json)
+          for id in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64; do
+            archive="agent-connector-v${version}-${id}.tar.gz"
+            test -f "$archive"
             tar -tvzf "$archive" | awk '$NF ~ /\/agc$/ { if (substr($1,4,1) != "x") exit 1; found=1 } END { exit !found }'
           done
-          sha256sum *.tar.gz *.zip > SHA256SUMS
+          for id in windows-x86_64 windows-aarch64; do
+            test -f "agent-connector-v${version}-${id}.zip"
+          done
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 6
+          sha256sum agent-connector-* > SHA256SUMS
+      - name: Check existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o release.json -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          if [ "$status" = 404 ]; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$status" = 200
+          jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and (.assets | length) == 7 and all(.assets[]; (.digest // "" | test("^sha256:[0-9a-f]{64}$")))' release.json
+          mkdir existing
+          gh release download "$RELEASE_TAG" --pattern SHA256SUMS --dir existing
+          test "$(sha256sum existing/SHA256SUMS | cut -d' ' -f1)" = "$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .digest[7:]' release.json)"
+          diff -u <(find artifacts -maxdepth 1 -type f -printf '%f\n' | sort) <(jq -r '.assets[].name' release.json | sort)
+          diff -u <(sort existing/SHA256SUMS) <(jq -r '.assets[] | select(.name != "SHA256SUMS") | "\(.digest[7:])  \(.name)"' release.json | sort)
+          echo 'exists=true' >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        if: steps.existing.outputs.exists != 'true'
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: |
@@ -225,3 +271,21 @@ jobs:
             artifacts/*.zip
             artifacts/SHA256SUMS
           body_path: RELEASE_NOTES.md
+          overwrite_files: false
+
+  publish-jsr:
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+    needs: release
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with: { deno-version: v2.9.3 }
+      - run: deno publish

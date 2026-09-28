@@ -1,7 +1,7 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@darkhorseprojects/portable-agents@~0.1.4": "0.1.4",
+    "jsr:@darkhorseprojects/portable-agents@~0.1.5": "0.1.5",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@1.1.6": "1.1.6",
     "jsr:@std/yaml@1.2.0": "1.2.0",
@@ -11,8 +11,8 @@
     "npm:effect@4.0.0-rc.113": "4.0.0-rc.113"
   },
   "jsr": {
-    "@darkhorseprojects/portable-agents@0.1.4": {
-      "integrity": "4662ea27ac94f2e59710ce670824f5202fc8c389060acba8268aa17621d16278",
+    "@darkhorseprojects/portable-agents@0.1.5": {
+      "integrity": "dd54813637858a5142238dd433f87690e9c86c40a1ab92a03cfa4e73dee8793c",
       "dependencies": [
         "npm:effect"
       ]
@@ -311,7 +311,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@darkhorseprojects/portable-agents@~0.1.4",
+      "jsr:@darkhorseprojects/portable-agents@~0.1.5",
       "jsr:@std/path@1.1.6",
       "jsr:@std/yaml@1.2.0",
       "npm:@effect/platform-node@4.0.0-rc.113",

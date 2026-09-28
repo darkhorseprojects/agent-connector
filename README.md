@@ -18,7 +18,7 @@ Install the CLI from JSR:
 ```sh
 deno install --global --name agc \
   --allow-env --allow-ffi --allow-net --allow-read --allow-run=agent --allow-write \
-  jsr:@darkhorseprojects/agent-connector@^0.1.4
+  jsr:@darkhorseprojects/agent-connector@^0.1.5
 ```
 
 Alternatively, download the standalone archive for your platform from the
